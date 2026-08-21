@@ -1,0 +1,12 @@
+out/*
+!out/.gitkeep
+module/*.o
+module/*.ko
+module/*.mod*
+module/*.cmd
+module/Module.symvers
+module/modules.order
+loader/*.o
+loader/avbinit
+.cache/
+.DS_Store

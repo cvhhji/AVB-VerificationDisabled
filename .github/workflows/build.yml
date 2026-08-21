@@ -1,0 +1,39 @@
+name: Build android16-6.12
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/ylarod/ddk:android16-6.12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LKM
+        run: |
+          make AVB_DDK_TARGET=android16-6.12
+          mkdir -p out
+          cp -f module/avb_interceptor.ko out/avb_interceptor-android16-6.12.ko
+          cp -f loader/avbinit out/avbinit
+      - name: Fetch pinned static magiskboot
+        run: |
+          tools/fetch-static-magiskboot.sh --output out/magiskboot-arm64
+          cp -f tools/patch-init-boot-android.sh out/patch-init-boot-android.sh
+          chmod 0755 out/magiskboot-arm64 out/patch-init-boot-android.sh
+      - name: Verify artifacts
+        run: tools/verify-artifacts.sh --loader out/avbinit --module out/avb_interceptor-android16-6.12.ko --target android16-6.12
+      - name: Static tests
+        run: tests/static-check.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AVB-VerificationDisabled-android16-6.12
+          path: |
+            out/avb_interceptor-android16-6.12.ko
+            out/avbinit
+            out/magiskboot-arm64
+            out/patch-init-boot-android.sh
+          if-no-files-found: error
