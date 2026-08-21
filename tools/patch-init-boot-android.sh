@@ -2,7 +2,7 @@
 set -eu
 fail(){ echo "错误：$*" >&2; exit 1; }
 usage(){ echo "用法：$0 --input <镜像> --output <新镜像> --loader <avbinit> --module <avb_interceptor.ko> [--magiskboot <路径>]" >&2; }
-hash(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else toybox sha256sum "$1"; fi | awk '{print $1}'; }
+sha256_file(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else toybox sha256sum "$1"; fi | awk '{print $1}'; }
 input= output= loader= module=; magiskboot=${MAGISKBOOT:-magiskboot}
 while [ $# -gt 0 ]; do
  case "$1" in
@@ -22,9 +22,9 @@ for e in init.next avb_interceptor.ko avb_interceptor.meta; do ! "$magiskboot" c
 "$magiskboot" cpio ramdisk.cpio "extract init ../extract/original-init"
 {
  echo format=3; echo project=AVB-VerificationDisabled
- echo original_init_sha256=$(hash "$work/extract/original-init")
- echo loader_sha256=$(hash "$work/assets/avbinit")
- echo module_sha256=$(hash "$work/assets/avb_interceptor.ko")
+ echo original_init_sha256=$(sha256_file "$work/extract/original-init")
+ echo loader_sha256=$(sha256_file "$work/assets/avbinit")
+ echo module_sha256=$(sha256_file "$work/assets/avb_interceptor.ko")
 } > "$work/assets/avb_interceptor.meta"
 "$magiskboot" cpio ramdisk.cpio "mv init init.next" "add 0755 init ../assets/avbinit" "add 0644 avb_interceptor.ko ../assets/avb_interceptor.ko" "add 0644 avb_interceptor.meta ../assets/avb_interceptor.meta"
 "$magiskboot" repack "$input" "$work/candidate.img" || fail "重打包失败"

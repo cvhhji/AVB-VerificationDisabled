@@ -2,6 +2,10 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd); cd "$root"
 bash -n tools/*.sh; sh -n tools/patch-init-boot-android.sh
+! grep -q '^hash()' tools/patch-init-boot-android.sh
+grep -q 'sha256_file.*original-init' tools/patch-init-boot-android.sh
+grep -q 'sha256_file.*avbinit' tools/patch-init-boot-android.sh
+grep -q 'sha256_file.*avb_interceptor\.ko' tools/patch-init-boot-android.sh
 grep -q 'AVB_VBMETA_FLAGS_OFFSET 120U' module/vbmeta_proxy.c
 grep -q 'AVB_VBMETA_VERIFICATION_DISABLED_BYTE_MASK 0x02U' module/vbmeta_proxy.c
 grep -q 'androidboot.verifiedbootstate = \\"orange\\"' module/bootconfig_proxy.c
