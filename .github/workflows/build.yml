@@ -19,6 +19,10 @@ jobs:
           mkdir -p out
           cp -f module/avb_interceptor.ko out/avb_interceptor-android16-6.12.ko
           cp -f loader/avbinit out/avbinit
+      - name: Install packaging dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends unzip ca-certificates curl
       - name: Fetch pinned static magiskboot
         run: |
           tools/fetch-static-magiskboot.sh --output out/magiskboot-arm64
