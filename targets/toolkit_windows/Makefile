@@ -1,10 +1,13 @@
 TOOLKIT_NAME := toolkit_windows
 PATCHER_SRC  := ../../abl_patcher
 EXTRACTFV_SRC := build/extractfv_src
+LZMA_SRC := build/lzma_src
 GBL_RAW := https://raw.githubusercontent.com/cvhhji/gbl_root_canoe/main
+XZ_VERSION := 5.4.5
+XZ_URL := https://tukaani.org/xz/xz-$(XZ_VERSION).tar.gz
 CC_WIN := x86_64-w64-mingw32-gcc
 
-.PHONY: all clean patcher extractfv package
+.PHONY: all clean patcher lzma extractfv package
 
 all: package
 
@@ -13,10 +16,26 @@ patcher:
 	$(CC_WIN) -O2 -o build/toolkit/bin/patch_abl_avb.exe \
 		$(PATCHER_SRC)/patch_abl_avb.c $(PATCHER_SRC)/avb_patch.c $(PATCHER_SRC)/arm64_util.c
 
-extractfv:
+lzma:
+	mkdir -p $(LZMA_SRC)
+	if [ ! -f $(LZMA_SRC)/src/liblzma/.libs/liblzma.a ]; then \
+		curl -sL "$(XZ_URL)" -o $(LZMA_SRC)/xz.tar.gz && \
+		tar -xzf $(LZMA_SRC)/xz.tar.gz -C $(LZMA_SRC) --strip-components=1 && \
+		cd $(LZMA_SRC) && ./configure --host=x86_64-w64-mingw32 \
+			--enable-static --disable-shared \
+			--disable-xz --disable-xzdec --disable-lzmadec \
+			--disable-lzmainfo --disable-scripts --disable-doc \
+			CFLAGS="-O2" && \
+		$(MAKE) -C $(LZMA_SRC) -j$$(nproc); \
+	fi
+
+extractfv: lzma
 	mkdir -p build/toolkit/bin $(EXTRACTFV_SRC)
 	curl -sL "$(GBL_RAW)/submodules/ablfvextractor/extractfv.c" -o $(EXTRACTFV_SRC)/extractfv.c
-	$(CC_WIN) -O2 -o build/toolkit/bin/extractfv.exe $(EXTRACTFV_SRC)/extractfv.c -llzma
+	$(CC_WIN) -O2 -o build/toolkit/bin/extractfv.exe \
+		$(EXTRACTFV_SRC)/extractfv.c \
+		-I$(LZMA_SRC)/src/liblzma/api \
+		-L$(LZMA_SRC)/src/liblzma/.libs -llzma
 
 package: patcher extractfv
 	cp -r resources/* build/toolkit/
