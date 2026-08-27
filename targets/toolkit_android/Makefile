@@ -24,13 +24,13 @@ lzma:
 		else \
 			curl -sL --retry 3 --connect-timeout 30 "$(XZ_URL)" -o $(LZMA_SRC)/xz.tar.gz && \
 			tar -xzf $(LZMA_SRC)/xz.tar.gz -C $(LZMA_SRC) --strip-components=1; \
-		fi && \
-		cd $(LZMA_SRC) && ./configure --host=aarch64-linux-gnu \
+		fi; \
+		(cd $(LZMA_SRC) && ./configure --host=aarch64-linux-gnu \
 			--enable-static --disable-shared \
 			--disable-xz --disable-xzdec --disable-lzmadec \
 			--disable-lzmainfo --disable-scripts --disable-doc \
 			CFLAGS="-O2" && \
-		$(MAKE) -C $(LZMA_SRC) -j$$(nproc); \
+		$(MAKE) -j$$(nproc)); \
 	fi
 
 extractfv: lzma
