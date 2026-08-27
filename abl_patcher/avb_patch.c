@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 /* ---- string search helpers ---- */
 
@@ -17,7 +18,6 @@ static int32_t find_mem(const uint8_t *data, int32_t size,
     return -1;
 }
 
-/* Search UTF-16LE string (each char followed by 0x00). */
 static int32_t find_utf16le(const uint8_t *data, int32_t size,
                             const char *str, int32_t start)
 {
@@ -41,10 +41,76 @@ static int32_t find_ascii(const uint8_t *data, int32_t size,
                     (int32_t)strlen(str), start);
 }
 
-/* ---- ADRL rewrite ----
- * Rewrite the ADRP+ADD pair at `off` to compute `new_target`.
- * Preserves Rd of ADRP and Rn/Rd of ADD (must match: ADRP.Rd == ADD.Rn).
- */
+static inline uint64_t read_u64(const uint8_t *data, int32_t off)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= (uint64_t)data[off + i] << (i * 8);
+    return v;
+}
+
+static inline void write_u64(uint8_t *data, int32_t off, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) data[off + i] = (uint8_t)(v >> (i * 8));
+}
+
+static inline uint16_t read_u16(const uint8_t *data, int32_t off)
+{
+    return (uint16_t)data[off] | ((uint16_t)data[off + 1] << 8);
+}
+
+static inline uint32_t read_u32(const uint8_t *data, int32_t off)
+{
+    return (uint32_t)data[off] | ((uint32_t)data[off + 1] << 8) |
+           ((uint32_t)data[off + 2] << 16) | ((uint32_t)data[off + 3] << 24);
+}
+
+/* ---- PE/COFF detection and section parsing ---- */
+
+typedef struct {
+    int32_t data_start;
+    int32_t data_end;
+    int     is_pe;
+} pe_info_t;
+
+static int parse_pe_sections(const uint8_t *data, int32_t size, pe_info_t *info)
+{
+    memset(info, 0, sizeof(*info));
+    if (size < 0x40 || data[0] != 'M' || data[1] != 'Z') return -1;
+
+    uint32_t pe_ptr = read_u32(data, 0x3C);
+    if (pe_ptr + 24 > (uint32_t)size) return -1;
+    if (data[pe_ptr] != 'P' || data[pe_ptr + 1] != 'E') return -1;
+
+    info->is_pe = 1;
+    uint16_t num_sec = read_u16(data, pe_ptr + 6);
+    uint16_t opt_size = read_u16(data, pe_ptr + 0x14);
+    uint32_t sec_table = pe_ptr + 0x18 + opt_size;
+
+    for (int i = 0; i < num_sec; i++) {
+        uint32_t soff = sec_table + (uint32_t)i * 0x28;
+        if (soff + 0x28 > (uint32_t)size) break;
+        char name[9] = {0};
+        memcpy(name, data + soff, 8);
+        uint32_t raw_ptr = read_u32(data, soff + 20);
+        uint32_t raw_size = read_u32(data, soff + 16);
+        if (strcmp(name, ".data") == 0 || strcmp(name, ".rdata") == 0 ||
+            strcmp(name, ".sd") == 0) {
+            if (info->data_start == 0 || (int32_t)raw_ptr < info->data_start)
+                info->data_start = (int32_t)raw_ptr;
+            int32_t end = (int32_t)(raw_ptr + raw_size);
+            if (end > info->data_end) info->data_end = end;
+        }
+    }
+    if (info->data_start == 0) {
+        /* fallback: use last 1/3 of binary as data */
+        info->data_start = size * 2 / 3;
+        info->data_end = size;
+    }
+    return 0;
+}
+
+/* ---- ADRL rewrite ---- */
+
 static bool adrl_rewrite_target(uint8_t *data, int32_t off, uint64_t load_base,
                                 int64_t new_target)
 {
@@ -54,24 +120,17 @@ static bool adrl_rewrite_target(uint8_t *data, int32_t off, uint64_t load_base,
     if (arm64_rd(adrp) != arm64_rn(add)) return false;
 
     uint8_t  adrp_rd = arm64_rd(adrp);
-    uint8_t  add_rd  = arm64_rd(add);  /* preserve original destination */
+    uint8_t  add_rd  = arm64_rd(add);
     uint64_t pc   = load_base + (uint64_t)off;
     uint64_t pc_page = pc & ~(uint64_t)0xFFF;
     uint64_t tgt_page = (uint64_t)new_target & ~(uint64_t)0xFFF;
 
     int64_t page_diff = (int64_t)((tgt_page - pc_page) >> 12);
-    /* 21-bit signed immediate */
-    if (page_diff < -(1LL << 20) || page_diff >= (1LL << 20)) {
-        printf("  [adrl_rewrite] page_diff %lld out of range\n",
-               (long long)page_diff);
-        return false;
-    }
+    if (page_diff < -(1LL << 20) || page_diff >= (1LL << 20)) return false;
     uint32_t immlo = (uint32_t)(page_diff & 0x3);
     uint32_t immhi = (uint32_t)((page_diff >> 2) & 0x7FFFF);
     uint32_t new_adrp = 0x90000000 | (immlo << 29) | (immhi << 5) | adrp_rd;
-
     uint32_t add_imm = (uint32_t)((uint64_t)new_target & 0xFFF);
-    /* ADD X{add_rd}, X{adrp_rd}, #add_imm - preserve both registers */
     uint32_t new_add = 0x91000000 | (add_imm << 10) | (adrp_rd << 5) | add_rd;
 
     arm64_write(data, off, new_adrp);
@@ -79,7 +138,6 @@ static bool adrl_rewrite_target(uint8_t *data, int32_t off, uint64_t load_base,
     return true;
 }
 
-/* ---- find all ADRL references to a target address ---- */
 #define MAX_REFS 64
 static int32_t find_adrl_refs(const uint8_t *data, int32_t size,
                               uint64_t load_base, int64_t target,
@@ -96,85 +154,159 @@ static int32_t find_adrl_refs(const uint8_t *data, int32_t size,
 }
 
 /* ================================================================
- * Patch 1: Force verifiedbootstate=green
+ * Patch 1: Boot state pointer array patching
  *
- * Strategy: find "orange", "yellow", "red" UTF-16LE strings, locate
- * ADRP+ADD pairs that load them, and repoint those pairs to "green".
- * This makes the ABL always report green regardless of internal
- * verification result, hiding the unlocked/disabled state.
+ * Many Qualcomm ABL builds store boot state names in a name-value
+ * array in .data: { const char *name; uint64_t value; } with 16-byte
+ * stride.  Entries for green/orange/yellow/red are looked up by name.
+ *
+ * Strategy: find 64-bit pointers to "orange"/"yellow"/"red" strings
+ * in the data section and redirect them to "green".  If a 16-byte
+ * stride is detected, also overwrite the adjacent value field with
+ * green's value so both name and enum match.
  * ================================================================ */
-static int32_t patch_force_green(uint8_t *data, int32_t size, uint64_t load_base)
+static int32_t patch_boot_state_array(uint8_t *data, int32_t size,
+                                      const pe_info_t *pe)
 {
     int32_t patched = 0;
-    int32_t green_off = find_utf16le(data, size, "green", 0);
+
+    /* Find green string (ASCII first, then UTF-16LE) */
+    int32_t green_off = find_ascii(data, size, "green", 0);
+    if (green_off < 0) green_off = find_utf16le(data, size, "green", 0);
     if (green_off < 0) {
-        /* try ASCII */
-        green_off = find_ascii(data, size, "green", 0);
-    }
-    if (green_off < 0) {
-        printf("[force_green] 'green' string not found, skipping\n");
+        printf("[boot_state_array] 'green' not found, skipping\n");
         return 0;
     }
-    int64_t green_target = (int64_t)green_off;
-    printf("[force_green] 'green' at file offset 0x%X\n", green_off);
+    uint64_t green_ptr = (uint64_t)green_off;
+    printf("[boot_state_array] 'green' at 0x%X\n", green_off);
 
+    /* Find green's value (search for pointer to green in data section,
+     * then read the adjacent 8-byte value) */
+    uint64_t green_value = 0;
+    int32_t green_value_off = -1;
+    for (int32_t off = pe->data_start; off + 16 <= pe->data_end; off += 8) {
+        if (read_u64(data, off) == green_ptr) {
+            green_value = read_u64(data, off + 8);
+            green_value_off = off;
+            printf("[boot_state_array] green entry at 0x%X, value=0x%llX\n",
+                   off, (unsigned long long)green_value);
+            break;
+        }
+    }
+
+    /* For each non-green state, find ALL occurrences and check each for
+     * data-section pointers.  Some ABLs have multiple "red"/"orange"
+     * strings; only the boot-state one has a pointer in .data. */
     const char *states[] = { "orange", "yellow", "red" };
     for (int s = 0; s < 3; s++) {
-        int32_t off = 0;
-        int32_t found = 0;
-        while ((off = find_utf16le(data, size, states[s], off)) >= 0) {
-            found++;
-            int32_t refs[MAX_REFS];
-            int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                           (int64_t)off, refs, MAX_REFS);
-            printf("[force_green] '%s' at 0x%X, %d ADRL reference(s)\n",
-                   states[s], off, nrefs);
-            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                if (adrl_rewrite_target(data, refs[r], load_base, green_target)) {
-                    printf("  -> repointed ADRL at 0x%X to green\n", refs[r]);
+        int32_t str_off = 0;
+        int found = 0;
+        while ((str_off = find_ascii(data, size, states[s], str_off)) >= 0) {
+            uint64_t str_ptr = (uint64_t)str_off;
+            /* Search data section for 64-bit pointers to this string */
+            for (int32_t off = pe->data_start; off + 8 <= pe->data_end; off += 8) {
+                if (read_u64(data, off) == str_ptr) {
+                    printf("[boot_state_array] '%s' at 0x%X, pointer at 0x%X "
+                           "-> redirect to green\n", states[s], str_off, off);
+                    write_u64(data, off, green_ptr);
                     patched++;
-                }
-            }
-            off += (int32_t)strlen(states[s]) * 2 + 2;
-        }
-        /* also try ASCII variant */
-        off = 0;
-        while ((off = find_ascii(data, size, states[s], off)) >= 0) {
-            int32_t refs[MAX_REFS];
-            int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                           (int64_t)off, refs, MAX_REFS);
-            if (nrefs > 0) {
-                printf("[force_green] '%s' (ASCII) at 0x%X, %d ADRL ref(s)\n",
-                       states[s], off, nrefs);
-                for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                    if (adrl_rewrite_target(data, refs[r], load_base,
-                                            green_target)) {
-                        printf("  -> repointed ADRL at 0x%X to green\n",
-                               refs[r]);
-                        patched++;
+                    found++;
+                    /* If 16-byte name+value entry, also fix value */
+                    if (green_value_off >= 0 && off + 16 <= size) {
+                        uint64_t old_val = read_u64(data, off + 8);
+                        if (old_val != green_value) {
+                            write_u64(data, off + 8, green_value);
+                            printf("     value 0x%llX -> 0x%llX\n",
+                                   (unsigned long long)old_val,
+                                   (unsigned long long)green_value);
+                            patched++;
+                        }
                     }
                 }
             }
-            off += (int32_t)strlen(states[s]) + 1;
+            str_off += (int32_t)strlen(states[s]) + 1;
         }
-        if (found == 0) {
-            printf("[force_green] '%s' not found\n", states[s]);
+        /* Also try UTF-16LE */
+        str_off = 0;
+        while ((str_off = find_utf16le(data, size, states[s], str_off)) >= 0) {
+            uint64_t str_ptr = (uint64_t)str_off;
+            for (int32_t off = pe->data_start; off + 8 <= pe->data_end; off += 8) {
+                if (read_u64(data, off) == str_ptr) {
+                    printf("[boot_state_array] '%s' (UTF-16LE) at 0x%X, "
+                           "pointer at 0x%X -> green\n", states[s], str_off, off);
+                    write_u64(data, off, green_ptr);
+                    patched++;
+                    found++;
+                    if (green_value_off >= 0 && off + 16 <= size) {
+                        uint64_t old_val = read_u64(data, off + 8);
+                        if (old_val != green_value) {
+                            write_u64(data, off + 8, green_value);
+                            patched++;
+                        }
+                    }
+                }
+            }
+            str_off += (int32_t)strlen(states[s]) * 2 + 2;
+        }
+        if (!found) {
+            printf("[boot_state_array] '%s': no data-section pointers found\n",
+                   states[s]);
         }
     }
     return patched;
 }
 
 /* ================================================================
- * Patch 2: Short-circuit AVB verification entry
+ * Patch 2: Force green via ADRL references (fallback)
  *
- * Strategy: locate the "AVB0" magic constant or vbmeta-related
- * strings, trace back to the enclosing function, and patch the
- * function prologue to:  MOV X0, XZR  (return 0 = EFI_SUCCESS)
- *                       RET
- *
- * This makes the ABL skip all partition verification (boot,
- * init_boot, vendor_boot, dtbo, system, vendor, etc.) while
- * continuing the boot flow normally.
+ * For ABL builds that reference boot state strings directly via
+ * ADRP+ADD rather than through a pointer array.
+ * ================================================================ */
+static int32_t patch_force_green_adrl(uint8_t *data, int32_t size,
+                                      uint64_t load_base)
+{
+    int32_t patched = 0;
+    int32_t green_off = find_utf16le(data, size, "green", 0);
+    if (green_off < 0) green_off = find_ascii(data, size, "green", 0);
+    if (green_off < 0) return 0;
+    int64_t green_target = (int64_t)green_off;
+
+    const char *states[] = { "orange", "yellow", "red" };
+    for (int s = 0; s < 3; s++) {
+        int32_t off = 0;
+        while ((off = find_utf16le(data, size, states[s], off)) >= 0) {
+            int32_t refs[MAX_REFS];
+            int32_t nrefs = find_adrl_refs(data, size, load_base,
+                                           (int64_t)off, refs, MAX_REFS);
+            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
+                if (adrl_rewrite_target(data, refs[r], load_base, green_target)) {
+                    printf("[force_green_adrl] repointed ADRL at 0x%X to green\n",
+                           refs[r]);
+                    patched++;
+                }
+            }
+            off += (int32_t)strlen(states[s]) * 2 + 2;
+        }
+        off = 0;
+        while ((off = find_ascii(data, size, states[s], off)) >= 0) {
+            int32_t refs[MAX_REFS];
+            int32_t nrefs = find_adrl_refs(data, size, load_base,
+                                           (int64_t)off, refs, MAX_REFS);
+            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
+                if (adrl_rewrite_target(data, refs[r], load_base, green_target)) {
+                    printf("[force_green_adrl] repointed ADRL at 0x%X to green\n",
+                           refs[r]);
+                    patched++;
+                }
+            }
+            off += (int32_t)strlen(states[s]) + 1;
+        }
+    }
+    return patched;
+}
+
+/* ================================================================
+ * Patch 3: Short-circuit AVB verification entry
  * ================================================================ */
 static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
                                           uint64_t load_base)
@@ -183,27 +315,23 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
     int32_t func_starts[16];
     int32_t nfuncs = 0;
 
-    /* Search for "AVB0" magic bytes */
     const uint8_t avb0[] = { 'A', 'V', 'B', '0' };
     int32_t off = 0;
     while ((off = find_mem(data, size, avb0, 4, off)) >= 0) {
         printf("[short_circuit] 'AVB0' at offset 0x%X\n", off);
-        /* Find code references to this offset via ADRL */
         int32_t refs[MAX_REFS];
         int32_t nrefs = find_adrl_refs(data, size, load_base,
                                        (int64_t)off, refs, MAX_REFS);
         for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
             int32_t fstart = arm64_find_function_start(
-                data, size, refs[r], 1024);
+                data, size, refs[r], 4096);
             if (fstart >= 0) {
-                /* deduplicate */
                 bool dup = false;
-                for (int i = 0; i < nfuncs; i++) {
+                for (int i = 0; i < nfuncs; i++)
                     if (func_starts[i] == fstart) { dup = true; break; }
-                }
                 if (!dup && nfuncs < 16) {
                     func_starts[nfuncs++] = fstart;
-                    printf("  -> function start at 0x%X (ref at 0x%X)\n",
+                    printf("  -> function at 0x%X (ref 0x%X)\n",
                            fstart, refs[r]);
                 }
             }
@@ -211,173 +339,87 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
         off += 4;
     }
 
-    /* Also search for "vbmeta" string references */
-    off = 0;
-    while ((off = find_ascii(data, size, "vbmeta", off)) >= 0) {
-        int32_t refs[MAX_REFS];
-        int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                       (int64_t)off, refs, MAX_REFS);
-        for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-            int32_t fstart = arm64_find_function_start(
-                data, size, refs[r], 1024);
-            if (fstart >= 0) {
-                bool dup = false;
-                for (int i = 0; i < nfuncs; i++) {
-                    if (func_starts[i] == fstart) { dup = true; break; }
-                }
-                if (!dup && nfuncs < 16) {
-                    func_starts[nfuncs++] = fstart;
-                    printf("[short_circuit] 'vbmeta' ref at 0x%X -> func 0x%X\n",
-                           refs[r], fstart);
-                }
-            }
-        }
-        off += 6;
-    }
-
-    /* Also search for "VerifiedBoot" or "verified_boot" strings */
-    const char *vb_strings[] = { "VerifiedBoot", "verified_boot",
-                                 "AVB ", "avb_", "Avb" };
-    for (int s = 0; s < 5; s++) {
+    /* Also try vbmeta / VerifiedBoot strings */
+    const char *vb_strs[] = { "vbmeta", "VerifiedBoot", "androidboot.vbmeta" };
+    for (int s = 0; s < 3; s++) {
         off = 0;
-        while ((off = find_ascii(data, size, vb_strings[s], off)) >= 0) {
+        while ((off = find_ascii(data, size, vb_strs[s], off)) >= 0) {
             int32_t refs[MAX_REFS];
             int32_t nrefs = find_adrl_refs(data, size, load_base,
                                            (int64_t)off, refs, MAX_REFS);
             for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
                 int32_t fstart = arm64_find_function_start(
-                    data, size, refs[r], 1024);
+                    data, size, refs[r], 4096);
                 if (fstart >= 0) {
                     bool dup = false;
-                    for (int i = 0; i < nfuncs; i++) {
+                    for (int i = 0; i < nfuncs; i++)
                         if (func_starts[i] == fstart) { dup = true; break; }
-                    }
                     if (!dup && nfuncs < 16) {
                         func_starts[nfuncs++] = fstart;
-                        printf("[short_circuit] '%s' ref at 0x%X -> func 0x%X\n",
-                               vb_strings[s], refs[r], fstart);
+                        printf("  -> '%s' ref 0x%X -> func 0x%X\n",
+                               vb_strs[s], refs[r], fstart);
                     }
                 }
             }
-            off += (int32_t)strlen(vb_strings[s]) + 1;
+            off += (int32_t)strlen(vb_strs[s]) + 1;
         }
     }
 
-    /* Patch each unique function */
     for (int i = 0; i < nfuncs; i++) {
         int32_t fstart = func_starts[i];
         if (fstart + 8 > size) continue;
         uint32_t orig0 = arm64_read(data, fstart);
         uint32_t orig1 = arm64_read(data, fstart + 4);
-        /* MOV X0, XZR ; RET */
         arm64_write(data, fstart, arm64_mov_x0_zero());
         arm64_write(data, fstart + 4, arm64_ret());
-        printf("[short_circuit] patched function at 0x%X: "
-               "%08X %08X -> MOV X0,XZR ; RET\n",
+        printf("[short_circuit] patched 0x%X: %08X %08X -> MOV X0,XZR ; RET\n",
                fstart, orig0, orig1);
         patched++;
     }
-
-    if (nfuncs == 0) {
-        printf("[short_circuit] no verification functions located\n");
-    }
+    if (nfuncs == 0) printf("[short_circuit] no verification functions found\n");
     return patched;
 }
 
 /* ================================================================
- * Patch 3: NOP branches to error/red state
- *
- * Strategy: find conditional branches (CBZ/CBNZ/B.cond) that target
- * code referencing "red" or error strings, and NOP them so the
- * boot flow never enters the failure path.
+ * Patch 4: NOP branches to error/red state
  * ================================================================ */
 static int32_t patch_nop_error_branches(uint8_t *data, int32_t size,
                                         uint64_t load_base)
 {
     int32_t patched = 0;
-
-    /* Find "red" string addresses (UTF-16LE and ASCII) */
     int32_t red_offs[16];
     int32_t nred = 0;
     int32_t off = 0;
     while ((off = find_utf16le(data, size, "red", off)) >= 0 && nred < 16) {
-        red_offs[nred++] = off;
-        off += 8;
+        red_offs[nred++] = off; off += 8;
     }
     off = 0;
     while ((off = find_ascii(data, size, "red", off)) >= 0 && nred < 16) {
-        red_offs[nred++] = off;
-        off += 4;
+        red_offs[nred++] = off; off += 4;
     }
 
-    if (nred == 0) {
-        printf("[nop_error] no 'red' string found, skipping\n");
-        return 0;
-    }
-
-    /* For each red string, find ADRL refs, then find branches that
-     * target into the red-handling code region. */
     for (int ri = 0; ri < nred; ri++) {
         int32_t refs[MAX_REFS];
         int32_t nrefs = find_adrl_refs(data, size, load_base,
                                        (int64_t)red_offs[ri], refs, MAX_REFS);
         for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-            int32_t red_code_start = refs[r];
-            /* Scan backwards up to 64 instructions for a conditional branch
-             * that targets at or after red_code_start. */
-            for (int32_t scan = red_code_start - 4;
-                 scan >= red_code_start - 256 && scan >= 0;
-                 scan -= 4) {
+            for (int32_t scan = refs[r] - 4;
+                 scan >= refs[r] - 256 && scan >= 0; scan -= 4) {
                 uint32_t ins = arm64_read(data, scan);
                 if (arm64_is_cbz(ins) || arm64_is_cbnz(ins) ||
                     arm64_is_b_cond(ins)) {
                     int32_t tgt = arm64_branch_target(scan, ins);
-                    if (tgt >= red_code_start - 8 && tgt <= red_code_start + 32) {
-                        printf("[nop_error] NOP branch at 0x%X -> 0x%X "
-                               "(red handler at 0x%X)\n",
-                               scan, tgt, red_code_start);
+                    if (tgt >= refs[r] - 8 && tgt <= refs[r] + 32) {
+                        printf("[nop_error] NOP branch at 0x%X -> 0x%X\n",
+                               scan, tgt);
                         arm64_write(data, scan, arm64_nop());
                         patched++;
-                        break; /* one per ref is enough */
+                        break;
                     }
                 }
             }
         }
     }
-
-    /* Also look for "error" / "ERROR" / "failed" strings and NOP
-     * branches to their handlers. */
-    const char *err_strs[] = { "ERROR", "error", "failed", "FAILED",
-                               "Verification failed", "boot failure" };
-    for (int s = 0; s < 6; s++) {
-        off = 0;
-        while ((off = find_ascii(data, size, err_strs[s], off)) >= 0) {
-            int32_t refs[MAX_REFS];
-            int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                           (int64_t)off, refs, MAX_REFS);
-            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                for (int32_t scan = refs[r] - 4;
-                     scan >= refs[r] - 256 && scan >= 0;
-                     scan -= 4) {
-                    uint32_t ins = arm64_read(data, scan);
-                    if (arm64_is_cbz(ins) || arm64_is_cbnz(ins) ||
-                        arm64_is_b_cond(ins)) {
-                        int32_t tgt = arm64_branch_target(scan, ins);
-                        if (tgt >= refs[r] - 8 && tgt <= refs[r] + 32) {
-                            printf("[nop_error] NOP branch at 0x%X -> 0x%X "
-                                   "('%s' handler)\n",
-                                   scan, tgt, err_strs[s]);
-                            arm64_write(data, scan, arm64_nop());
-                            patched++;
-                            break;
-                        }
-                    }
-                }
-            }
-            off += (int32_t)strlen(err_strs[s]) + 1;
-        }
-    }
-
     return patched;
 }
 
@@ -394,34 +436,44 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
     memset(result, 0, sizeof(*result));
 
     printf("=== AVB BL-Stage Patcher ===\n");
-    printf("Buffer size: %d bytes (0x%X)\n", size, size);
-    printf("Load base: 0x%llX\n\n", (unsigned long long)load_base);
+    printf("Buffer: %d bytes (0x%X)\n", size, size);
+    printf("Load base: 0x%llX\n", (unsigned long long)load_base);
 
-    /* Count strings found */
-    if (find_utf16le(data, size, "green", 0) >= 0 ||
-        find_ascii(data, size, "green", 0) >= 0) result->strings_found++;
-    if (find_utf16le(data, size, "orange", 0) >= 0 ||
-        find_ascii(data, size, "orange", 0) >= 0) result->strings_found++;
+    /* Detect PE/COFF and parse data section bounds */
+    pe_info_t pe;
+    if (parse_pe_sections(data, size, &pe) == 0) {
+        printf("Format: PE/COFF (ARM64 EFI)\n");
+        printf("Data section: 0x%X - 0x%X\n", pe.data_start, pe.data_end);
+    } else {
+        printf("Format: raw binary (ELF or flat)\n");
+        pe.data_start = size * 2 / 3;
+        pe.data_end = size;
+        pe.is_pe = 0;
+    }
+    printf("\n");
 
-    /* Count AVB0 references */
+    /* Count AVB0 */
     const uint8_t avb0[] = { 'A', 'V', 'B', '0' };
     int32_t off = 0;
     while ((off = find_mem(data, size, avb0, 4, off)) >= 0) {
-        result->avb0_references++;
-        off += 4;
+        result->avb0_references++; off += 4;
     }
     printf("AVB0 occurrences: %d\n", result->avb0_references);
-    printf("Boot-state strings found: %d\n\n", result->strings_found);
+    if (find_ascii(data, size, "green", 0) >= 0 ||
+        find_utf16le(data, size, "green", 0) >= 0) result->strings_found++;
+    printf("Boot-state strings: %d\n\n", result->strings_found);
 
-    /* Apply patches in order: short-circuit first, then force green,
-     * then NOP error branches. Short-circuit may eliminate the need
-     * for the others, but we apply all for robustness. */
+    /* Apply patches */
     result->verify_shortcircuited =
         patch_short_circuit_verify(data, size, load_base);
     printf("\n");
 
-    result->green_forced =
-        patch_force_green(data, size, load_base);
+    /* Boot state array patching (primary for PE/COFF ABL) */
+    result->green_forced = patch_boot_state_array(data, size, &pe);
+    printf("\n");
+
+    /* Fallback: ADRL-based green forcing */
+    result->green_forced += patch_force_green_adrl(data, size, load_base);
     printf("\n");
 
     result->error_branches_noped =
@@ -429,17 +481,13 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
     printf("\n");
 
     printf("=== Patch Summary ===\n");
-    printf("  Verification functions short-circuited: %d\n",
+    printf("  Verify functions short-circuited: %d\n",
            result->verify_shortcircuited);
-    printf("  State strings forced to green: %d\n",
-           result->green_forced);
-    printf("  Error branches NOPed: %d\n",
-           result->error_branches_noped);
-
+    printf("  Boot state forced to green: %d\n", result->green_forced);
+    printf("  Error branches NOPed: %d\n", result->error_branches_noped);
     int32_t total = result->verify_shortcircuited +
                     result->green_forced +
                     result->error_branches_noped;
     printf("  Total patches: %d\n", total);
-
     return total > 0;
 }
