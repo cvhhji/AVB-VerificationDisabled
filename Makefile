@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 OUT_DIR := $(CURDIR)/out
 
 .PHONY: all abl_patcher test clean

@@ -17,7 +17,7 @@ jobs:
           mkdir -p out
           cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
       - name: Run tests
-        run: make test
+        run: bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
       - uses: actions/upload-artifact@v4
         with:
           name: patch_abl_avb

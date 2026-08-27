@@ -6,7 +6,7 @@
 #
 # Place ABL ELF files (*.elf, *.bin) in tests/samples/ to test against.
 # Each sample is patched to a temp file; exit code reflects overall result.
-set -euo pipefail
+set -eu
 
 PATCHER="${1:-abl_patcher/patch_abl_avb}"
 SAMPLES_DIR="${2:-tests/samples}"
