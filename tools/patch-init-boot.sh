@@ -1,12 +1,12 @@
-!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 usage() {
-    echo "??:$0 --input <boot.img|init_boot.img> --output <???.img> --loader <avbinit> --module <avb_interceptor.ko> [--magiskboot <??>] [--green-mode]" >&2
+    echo "用法：$0 --input <boot.img|init_boot.img> --output <新镜像.img> --loader <avbinit> --module <avb_interceptor.ko> [--magiskboot <路径>] [--green-mode]" >&2
     echo "" >&2
-    echo "  --green-mode  ???????:? ramdisk ??? /avb_keep_green," >&2
-    echo "                ???? orange ??,?? verifiedbootstate=green?" >&2
-    echo "                ?? gbl_root_canoe ??? + BL-stage AVB ?????" >&2
+    echo "  --green-mode  假回锁兼容模式：在 ramdisk 中放置 /avb_keep_green，" >&2
+    echo "                模块跳过 orange 注入，保持 verifiedbootstate=green。" >&2
+    echo "                配合 gbl_root_canoe 假回锁 + BL-stage AVB 补丁使用。" >&2
 }
 
 input=""
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
         --magiskboot) magiskboot_bin="${2:-}"; shift 2 ;;
         --green-mode) green_mode=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "??:???? $1" >&2; usage; exit 2 ;;
+        *) echo "错误：未知参数 $1" >&2; usage; exit 2 ;;
     esac
 done
 
@@ -44,11 +44,11 @@ magiskboot_bin=$(command -v -- "$magiskboot_bin")
 "$script_dir/verify-artifacts.sh" --loader "$loader" --module "$module" >/dev/null
 
 if [[ "$input" == "$output" ]]; then
-    echo "??:?????????????" >&2
+    echo "错误：输出路径不得与输入镜像相同" >&2
     exit 1
 fi
 if [[ -e "$output" ]]; then
-    echo "??:???????,????:$output" >&2
+    echo "错误：输出文件已存在，拒绝覆盖：$output" >&2
     exit 1
 fi
 
@@ -61,25 +61,25 @@ cp -- "$module" "$work_dir/assets/avb_interceptor.ko"
 # Green mode flag file: empty file in ramdisk root, avbinit detects it
 if [[ "$green_mode" -eq 1 ]]; then
     : > "$work_dir/assets/avb_keep_green"
-    echo "??:green ?????,??? /avb_keep_green"
+    echo "信息：green 模式已启用，将放置 /avb_keep_green"
 fi
 
 cd "$work_dir/image"
 if ! "$magiskboot_bin" unpack "$input"; then
-    echo "??:magiskboot ????????" >&2
+    echo "错误：magiskboot 无法解包输入镜像" >&2
     exit 1
 fi
 if [[ ! -f ramdisk.cpio ]]; then
-    echo "??:?????? ramdisk.cpio" >&2
+    echo "错误：输入镜像不含 ramdisk.cpio" >&2
     exit 1
 fi
 if ! "$magiskboot_bin" cpio ramdisk.cpio "exists init"; then
-    echo "??:ramdisk ???? /init" >&2
+    echo "错误：ramdisk 中不存在 /init" >&2
     exit 1
 fi
 for entry in init.next avb_interceptor.ko avb_interceptor.meta avb_keep_green; do
     if "$magiskboot_bin" cpio ramdisk.cpio "exists $entry" >/dev/null 2>&1; then
-        echo "??:ramdisk ??? /$entry,????" >&2
+        echo "错误：ramdisk 已存在 /$entry，拒绝覆盖" >&2
         exit 1
     fi
 done
@@ -114,8 +114,8 @@ fi
     --magiskboot "$magiskboot_bin" >/dev/null
 install -m 0644 -- "$work_dir/candidate.img" "$output"
 
-echo "??:??????? $output"
+echo "完成：已生成补丁镜像 $output"
 if [[ "$green_mode" -eq 1 ]]; then
-    echo "??:green(?????,verifiedbootstate ?? green)"
+    echo "模式：green（假回锁兼容，verifiedbootstate 保持 green）"
 fi
-echo "?????????:$input"
+echo "原输入镜像未被修改：$input"

@@ -1,4 +1,4 @@
-/ SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only
 typedef unsigned long size_t;
 
 #define AT_FDCWD (-100L)
@@ -104,9 +104,9 @@ static void write_error(const char *operation, long error)
 	char buffer[256];
 	size_t cursor = 0;
 
-	cursor = append_text(buffer, sizeof(buffer), cursor, "<3>avbinit:");
+	cursor = append_text(buffer, sizeof(buffer), cursor, "<3>avbinit：");
 	cursor = append_text(buffer, sizeof(buffer), cursor, operation);
-	cursor = append_text(buffer, sizeof(buffer), cursor, "??,??? ");
+	cursor = append_text(buffer, sizeof(buffer), cursor, "失败，错误码 ");
 	cursor = append_number(buffer, sizeof(buffer), cursor, error);
 	cursor = append_text(buffer, sizeof(buffer), cursor, "\n");
 	raw_syscall3(SYS_WRITE, log_fd, (long)buffer, cursor);
@@ -138,7 +138,7 @@ static int detect_green_mode(void)
 			    O_RDONLY | O_CLOEXEC, 0);
 	if (flag >= 0) {
 		raw_syscall1(SYS_CLOSE, flag);
-		write_log("<6>avbinit:??? /avb_keep_green,?? green ??\n");
+		write_log("<6>avbinit：检测到 /avb_keep_green，启用 green 模式\n");
 		return 1;
 	}
 	return 0;
@@ -160,18 +160,18 @@ static void load_module(void)
 			    (long)"/avb_interceptor.ko",
 			    O_RDONLY | O_CLOEXEC, 0);
 	if (file < 0) {
-		write_error("?? /avb_interceptor.ko ", file);
+		write_error("打开 /avb_interceptor.ko ", file);
 		return;
 	}
 
 	result = raw_syscall3(SYS_FINIT_MODULE, file, (long)params, 0);
 	raw_syscall1(SYS_CLOSE, file);
 	if (result == 0) {
-		write_log("<6>avbinit:avb_interceptor.ko ???\n");
+		write_log("<6>avbinit：avb_interceptor.ko 已加载\n");
 	} else if (result == ERR_EEXIST) {
-		write_log("<4>avbinit:?????,????? init ?\n");
+		write_log("<4>avbinit：模块已存在，继续执行原 init 链\n");
 	} else {
-		write_error("?? avb_interceptor.ko ", result);
+		write_error("加载 avb_interceptor.ko ", result);
 	}
 }
 
@@ -188,12 +188,12 @@ int avbinit_main(long argument_count, char **arguments, char **environment)
 {
 	(void)argument_count;
 	setup_log();
-	write_log("<6>avbinit:???? AVB VerificationDisabled ???\n");
+	write_log("<6>avbinit：开始加载 AVB VerificationDisabled 拦截器\n");
 	load_module();
 
 	execute("/init.next", arguments, environment);
 	execute("/init.real", arguments, environment);
 	execute("/system/bin/init", arguments, environment);
-	write_log("<0>avbinit:?? init ???????,????\n");
+	write_log("<0>avbinit：所有 init 执行路径均失败，停止启动\n");
 	return 127;
 }

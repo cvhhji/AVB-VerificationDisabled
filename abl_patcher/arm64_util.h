@@ -1,4 +1,4 @@
-* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-only
  *
  * arm64 instruction utilities for ABL binary patching.
  * Based on patterns observed in Qualcomm ABL (EDK2) arm64 code.

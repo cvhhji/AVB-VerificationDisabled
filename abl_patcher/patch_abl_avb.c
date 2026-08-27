@@ -1,4 +1,4 @@
-* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-only
  *
  * patch_abl_avb - Patch a Qualcomm ABL ELF to disable AVB verification
  * at BL stage while preserving fake-relock (locked/green state).

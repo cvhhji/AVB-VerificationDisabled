@@ -1,4 +1,4 @@
-/ SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/atomic.h>
 #include <linux/init.h>
 #include <linux/jiffies.h>
@@ -20,7 +20,7 @@ static struct delayed_work timeout_work;
  * (passed by avbinit when /avb_keep_green exists in ramdisk).  When true,
  * the bootconfig proxy skips the orange-state injection so userspace sees
  * verifiedbootstate=green (matching the fake-relock ABL).  vbmeta flags
- * patching is unaffected - libfs_avb still skips verification.
+ * patching is unaffected — libfs_avb still skips verification.
  */
 static bool avb_keep_green = false;
 module_param(avb_keep_green, bool, 0444);

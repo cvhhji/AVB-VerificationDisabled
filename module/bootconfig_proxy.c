@@ -1,4 +1,4 @@
-/ SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/atomic.h>
 #include <linux/dcache.h>
 #include <linux/errno.h>
@@ -34,9 +34,9 @@ enum injection_decision {
 struct bootconfig_slot {
 	struct file *file;
 	const struct file_operations *original_ops;
-	/* ?? file ????????,???? fops ????? const? */
+	/* 每个 file 需要保留原操作集，所以代理 fops 不能声明为 const。 */
 	struct file_operations proxy_ops;
-	/* ????? file ??????DSU ??? release? */
+	/* 序列化同一 file 的位置转换、DSU 判断和 release。 */
 	struct mutex io_lock;
 	bool ops_initialized;
 	enum injection_decision decision;
@@ -348,7 +348,7 @@ static int proxy_release(struct inode *inode, struct file *file)
 
 	mutex_unlock(&slot->io_lock);
 
-	/* __fput() ???? proxy_ops.owner ????????????? */
+	/* __fput() 随后通过 proxy_ops.owner 释放附加时取得的模块引用。 */
 	return result;
 }
 
@@ -396,7 +396,7 @@ static void attach_proxy(struct file *file)
 	slot->prefix = NULL;
 	slot->prefix_size = 0;
 	WRITE_ONCE(slot->file, file);
-	/* f_op ???,??????????????????? */
+	/* f_op 发布后，代理回调必须能看到上面的完整槽位状态。 */
 	smp_wmb();
 	if (cmpxchg(&file->f_op, original_ops, &slot->proxy_ops) !=
 	    original_ops) {

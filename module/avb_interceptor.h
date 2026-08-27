@@ -1,4 +1,4 @@
-* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef AVB_INTERCEPTOR_H
 #define AVB_INTERCEPTOR_H
 #include <linux/types.h>
