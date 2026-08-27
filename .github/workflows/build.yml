@@ -1,4 +1,4 @@
-ame: Build android16-6.12
+name: Build android16-6.12
 on:
   workflow_dispatch:
   push:

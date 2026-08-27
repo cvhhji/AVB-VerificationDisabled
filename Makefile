@@ -1,12 +1,12 @@
-DIR ?=
+KDIR ?=
 OUT_DIR := $(CURDIR)/out
 
 .PHONY: all module loader abl_patcher clean
 
-all: module loader abl_patcher
+all: module loader
 
 module:
-	@test -n "$(KDIR)" || { echo "??:??? KDIR,??? tools/build.sh --target <DDK target> ??" >&2; exit 1; }
+	@test -n "$(KDIR)" || { echo "错误：未设置 KDIR，请通过 tools/build.sh --target <DDK target> 构建" >&2; exit 1; }
 	$(MAKE) -C "$(KDIR)" M="$(CURDIR)/module" modules
 	mkdir -p "$(OUT_DIR)"
 	cp -f module/avb_interceptor.ko "$(OUT_DIR)/avb_interceptor.ko"
