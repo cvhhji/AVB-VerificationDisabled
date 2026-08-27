@@ -31,7 +31,7 @@ echo [2/3] Applying AVB verification disable patch...
 bin\patch_abl_avb.exe ABL_original.efi ABL_avb.efi
 if errorlevel 1 (
   echo.
-  echo ERROR: patch_abl_avb (AVB disable) failed
+  echo ERROR: patch_abl_avb AVB disable failed
   exit /b 1
 )
 
@@ -46,7 +46,7 @@ echo [3/3] Applying fake re-lock patch (gbl patch_abl)...
 bin\patch_abl.exe ABL_avb.efi ABL_patched.efi
 if errorlevel 1 (
   echo.
-  echo ERROR: gbl patch_abl (fake re-lock) failed
+  echo ERROR: gbl patch_abl fake re-lock failed
   exit /b 1
 )
 
