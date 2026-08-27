@@ -1,4 +1,4 @@
- SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-only
 # Makefile for BL-stage ABL AVB patcher
 
 CC      ?= gcc
