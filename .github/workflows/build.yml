@@ -70,15 +70,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: toolkit_linux
-          path: targets/toolkit_linux/build/toolkit_linux.zip
+          path: targets/toolkit_linux/build/toolkit/
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: toolkit_android
-          path: targets/toolkit_android/build/toolkit_android.zip
+          path: targets/toolkit_android/build/toolkit/
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: toolkit_windows
-          path: targets/toolkit_windows/build/toolkit_windows.zip
+          path: targets/toolkit_windows/build/toolkit/
           if-no-files-found: error
