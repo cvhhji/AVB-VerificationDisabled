@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+/ SPDX-License-Identifier: GPL-2.0-only
 #include <linux/atomic.h>
 #include <linux/dcache.h>
 #include <linux/errno.h>
@@ -34,9 +34,9 @@ enum injection_decision {
 struct bootconfig_slot {
 	struct file *file;
 	const struct file_operations *original_ops;
-	/* 每个 file 需要保留原操作集，所以代理 fops 不能声明为 const。 */
+	/* ?? file ????????,???? fops ????? const? */
 	struct file_operations proxy_ops;
-	/* 序列化同一 file 的位置转换、DSU 判断和 release。 */
+	/* ????? file ??????DSU ??? release? */
 	struct mutex io_lock;
 	bool ops_initialized;
 	enum injection_decision decision;
@@ -91,7 +91,22 @@ static bool is_proc_bootconfig(struct file *file)
 static bool decide_injection(struct bootconfig_slot *slot)
 {
 	if (slot->decision == INJECTION_UNCHECKED) {
-		if (avb_interceptor_phase_get() == AVB_PHASE_FIRST_STAGE) {
+		/*
+		 * Fake-relock green mode: the ABL already reports
+		 * verifiedbootstate=green.  Injecting "orange" would expose
+		 * the unlocked state to userspace (SafetyNet / key attestation
+		 * / ro.boot.verifiedbootstate).  Skip injection and let the
+		 * ABL-provided green value pass through unchanged.
+		 * vbmeta flags patching (vbmeta_proxy) still makes libfs_avb
+		 * skip hashtree verification, so AVB is effectively disabled
+		 * while the system sees a fully locked/green device.
+		 */
+		if (avb_interceptor_keep_green()) {
+			slot->decision = INJECTION_DISABLED;
+			if (atomic_cmpxchg(&orange_injection_logged, 0, 1) == 0)
+				pr_info("avb-interceptor: keep_green=on, "
+					"bootconfig orange injection skipped\n");
+		} else if (avb_interceptor_phase_get() == AVB_PHASE_FIRST_STAGE) {
 			slot->decision = INJECTION_ENABLED;
 			slot->prefix = orange_prefix;
 			slot->prefix_size = sizeof(orange_prefix) - 1;
@@ -330,9 +345,10 @@ static int proxy_release(struct inode *inode, struct file *file)
 	slot->prefix = NULL;
 	slot->prefix_size = 0;
 	spin_unlock_irqrestore(&slots_lock, flags);
+
 	mutex_unlock(&slot->io_lock);
 
-	/* __fput() 随后通过 proxy_ops.owner 释放附加时取得的模块引用。 */
+	/* __fput() ???? proxy_ops.owner ????????????? */
 	return result;
 }
 
@@ -380,7 +396,7 @@ static void attach_proxy(struct file *file)
 	slot->prefix = NULL;
 	slot->prefix_size = 0;
 	WRITE_ONCE(slot->file, file);
-	/* f_op 发布后，代理回调必须能看到上面的完整槽位状态。 */
+	/* f_op ???,??????????????????? */
 	smp_wmb();
 	if (cmpxchg(&file->f_op, original_ops, &slot->proxy_ops) !=
 	    original_ops) {
