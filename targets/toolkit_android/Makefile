@@ -26,7 +26,7 @@ lzma:
 			tar -xzf $(LZMA_SRC)/xz.tar.gz -C $(LZMA_SRC) --strip-components=1; \
 		fi; \
 		(cd $(LZMA_SRC) && ./configure --host=aarch64-linux-gnu \
-			--enable-static --disable-shared \
+			--enable-static --disable-shared --disable-nls \
 			--disable-xz --disable-xzdec --disable-lzmadec \
 			--disable-lzmainfo --disable-scripts --disable-doc \
 			CFLAGS="-O2" && \
