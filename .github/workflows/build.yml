@@ -42,12 +42,31 @@ jobs:
             liblzma-dev \
             zip \
             curl
+      - name: Download xz source (with retries)
+        run: |
+          mkdir -p /tmp/xz-src
+          for i in 1 2 3 4 5; do
+            echo "Download attempt $i..."
+            if curl -sL --connect-timeout 30 --max-time 120 \
+              "https://tukaani.org/xz/xz-5.4.5.tar.gz" \
+              -o /tmp/xz-src/xz.tar.gz; then
+              tar -xzf /tmp/xz-src/xz.tar.gz -C /tmp/xz-src --strip-components=1
+              if [ -f /tmp/xz-src/configure ]; then
+                echo "xz source ready at /tmp/xz-src"
+                exit 0
+              fi
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "ERROR: Failed to download xz source after 5 attempts"
+          exit 1
       - name: Build Linux toolkit
         run: make -C targets/toolkit_linux
       - name: Build Android toolkit
-        run: make -C targets/toolkit_android
+        run: XZ_SRC=/tmp/xz-src make -C targets/toolkit_android
       - name: Build Windows toolkit
-        run: make -C targets/toolkit_windows
+        run: XZ_SRC=/tmp/xz-src make -C targets/toolkit_windows
       - uses: actions/upload-artifact@v4
         with:
           name: toolkit_linux

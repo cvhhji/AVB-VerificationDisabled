@@ -19,8 +19,12 @@ patcher:
 lzma:
 	mkdir -p $(LZMA_SRC)
 	if [ ! -f $(LZMA_SRC)/src/liblzma/.libs/liblzma.a ]; then \
-		curl -sL "$(XZ_URL)" -o $(LZMA_SRC)/xz.tar.gz && \
-		tar -xzf $(LZMA_SRC)/xz.tar.gz -C $(LZMA_SRC) --strip-components=1 && \
+		if [ -n "$(XZ_SRC)" ] && [ -f "$(XZ_SRC)/configure" ]; then \
+			cp -r $(XZ_SRC)/* $(LZMA_SRC)/; \
+		else \
+			curl -sL --retry 3 --connect-timeout 30 "$(XZ_URL)" -o $(LZMA_SRC)/xz.tar.gz && \
+			tar -xzf $(LZMA_SRC)/xz.tar.gz -C $(LZMA_SRC) --strip-components=1; \
+		fi && \
 		cd $(LZMA_SRC) && ./configure --host=x86_64-w64-mingw32 \
 			--enable-static --disable-shared \
 			--disable-xz --disable-xzdec --disable-lzmadec \
