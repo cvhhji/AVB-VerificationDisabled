@@ -1,4 +1,4 @@
-name: Build android16-6.12
+ame: Build android16-6.12
 on:
   workflow_dispatch:
   push:
@@ -19,6 +19,10 @@ jobs:
           mkdir -p out
           cp -f module/avb_interceptor.ko out/avb_interceptor-android16-6.12.ko
           cp -f loader/avbinit out/avbinit
+      - name: Build BL-stage ABL patcher
+        run: |
+          make abl_patcher
+          cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
       - name: Install packaging dependencies
         run: |
           apt-get update
@@ -38,6 +42,7 @@ jobs:
           path: |
             out/avb_interceptor-android16-6.12.ko
             out/avbinit
+            out/patch_abl_avb
             out/magiskboot-arm64
             out/patch-init-boot-android.sh
           if-no-files-found: error
