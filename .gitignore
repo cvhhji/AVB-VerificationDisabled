@@ -1,12 +1,6 @@
 out/*
 !out/.gitkeep
-module/*.o
-module/*.ko
-module/*.mod*
-module/*.cmd
-module/Module.symvers
-module/modules.order
-loader/*.o
-loader/avbinit
+abl_patcher/*.o
+abl_patcher/patch_abl_avb
 .cache/
 .DS_Store

@@ -1,4 +1,4 @@
-name: Build android16-6.12
+name: Build ABL AVB Patcher
 on:
   workflow_dispatch:
   push:
@@ -9,35 +9,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/ylarod/ddk:android16-6.12
     steps:
       - uses: actions/checkout@v4
-      - name: Build LKM
+      - name: Build patch_abl_avb
         run: |
-          make AVB_DDK_TARGET=android16-6.12
+          make
           mkdir -p out
-          cp -f module/avb_interceptor.ko out/avb_interceptor-android16-6.12.ko
-          cp -f loader/avbinit out/avbinit
-      - name: Install packaging dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends unzip ca-certificates curl
-      - name: Fetch pinned static magiskboot
-        run: |
-          tools/fetch-static-magiskboot.sh --output out/magiskboot-arm64
-          cp -f tools/patch-init-boot-android.sh out/patch-init-boot-android.sh
-          chmod 0755 out/magiskboot-arm64 out/patch-init-boot-android.sh
-      - name: Verify artifacts
-        run: tools/verify-artifacts.sh --loader out/avbinit --module out/avb_interceptor-android16-6.12.ko --target android16-6.12
-      - name: Static tests
-        run: tests/static-check.sh
+          cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
+      - name: Run tests
+        run: make test
       - uses: actions/upload-artifact@v4
         with:
-          name: AVB-VerificationDisabled-android16-6.12
-          path: |
-            out/avb_interceptor-android16-6.12.ko
-            out/avbinit
-            out/magiskboot-arm64
-            out/patch-init-boot-android.sh
+          name: patch_abl_avb
+          path: out/patch_abl_avb
           if-no-files-found: error
