@@ -27,3 +27,38 @@ jobs:
           name: patch_abl_avb
           path: out/patch_abl_avb
           if-no-files-found: error
+
+  toolkit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross-compile toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            mingw-w64 \
+            liblzma-dev \
+            zip \
+            curl
+      - name: Build Linux toolkit
+        run: make -C targets/toolkit_linux
+      - name: Build Android toolkit
+        run: make -C targets/toolkit_android
+      - name: Build Windows toolkit
+        run: make -C targets/toolkit_windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolkit_linux
+          path: targets/toolkit_linux/build/toolkit_linux.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolkit_android
+          path: targets/toolkit_android/build/toolkit_android.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolkit_windows
+          path: targets/toolkit_windows/build/toolkit_windows.zip
+          if-no-files-found: error
