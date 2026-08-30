@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d %~dp0
+if not exist efisp mkdir efisp
 
 echo === ABL Toolkit: AVB Disable + Fake Re-lock (Windows) ===
 echo.
