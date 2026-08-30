@@ -43,23 +43,23 @@ echo   AVB disable applied: ABL_avb.efi
 
 echo.
 echo [3/3] Applying fake re-lock patch (gbl patch_abl)...
-bin\patch_abl.exe ABL_avb.efi ABL_patched.efi
+bin\patch_abl.exe ABL_avb.efi efisp\boot.efi
 if errorlevel 1 (
   echo.
   echo ERROR: gbl patch_abl fake re-lock failed
   exit /b 1
 )
 
-if not exist ABL_patched.efi (
+if not exist efisp\boot.efi (
   echo ERROR: patch_abl produced no output
   exit /b 1
 )
-echo   Fake re-lock applied: ABL_patched.efi
+echo   Fake re-lock applied: efisp\boot.efi
 
 echo.
 echo ========================================
 echo Done. Outputs:
-echo   ABL_patched.efi   - final ABL (AVB disabled + fake re-lock)
+echo   efisp\boot.efi   - EFISP Android loader (AVB disabled + fake re-lock)
 echo   ABL_avb.efi        - after AVB disable only (intermediate)
 echo   ABL_original.efi   - original unpatched ABL (backup)
 echo ========================================
