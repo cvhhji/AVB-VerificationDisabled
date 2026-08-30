@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPTDIR=$(dirname "$0")
 cd "$SCRIPTDIR"
+mkdir -p efisp
 
 echo "=== ABL Toolkit: AVB Disable + Fake Re-lock (Linux) ==="
 echo ""
@@ -40,22 +41,22 @@ echo "  AVB disable applied: ABL_avb.efi"
 
 echo ""
 echo "[3/3] Applying fake re-lock patch (gbl patch_abl)..."
-if ! ./bin/patch_abl ABL_avb.efi ABL_patched.efi; then
+if ! ./bin/patch_abl ABL_avb.efi efisp/boot.efi; then
   echo ""
   echo "ERROR: gbl patch_abl (fake re-lock) failed"
   exit 1
 fi
 
-if [ ! -f ABL_patched.efi ] || [ ! -s ABL_patched.efi ]; then
+if [ ! -f efisp/boot.efi ] || [ ! -s efisp/boot.efi ]; then
   echo "ERROR: patch_abl produced no output"
   exit 1
 fi
-echo "  Fake re-lock applied: ABL_patched.efi"
+echo "  Fake re-lock applied: efisp/boot.efi"
 
 echo ""
 echo "========================================"
 echo "Done. Outputs:"
-echo "  ABL_patched.efi   - final ABL (AVB disabled + fake re-lock)"
+echo "  efisp/boot.efi   - EFISP Android loader (AVB disabled + fake re-lock)"
 echo "  ABL_avb.efi        - after AVB disable only (intermediate)"
 echo "  ABL_original.efi   - original unpatched ABL (backup)"
 echo "========================================"
