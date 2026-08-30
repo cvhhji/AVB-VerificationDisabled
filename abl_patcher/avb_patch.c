@@ -365,6 +365,18 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
         }
     }
 
+    /*
+     * Fail closed: a string reference is not proof that a function is the
+     * AVB verification entry point.  Patching several candidates was the
+     * main source of non-booting EFISP loaders.  Until a device-specific
+     * signature is available, accept exactly one candidate only.
+     */
+    if (nfuncs != 1) {
+        printf("[short_circuit] refusing ambiguous match: %d candidate functions\n",
+               nfuncs);
+        return 0;
+    }
+
     for (int i = 0; i < nfuncs; i++) {
         int32_t fstart = func_starts[i];
         if (fstart + 8 > size) continue;
@@ -468,17 +480,17 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
         patch_short_circuit_verify(data, size, load_base);
     printf("\n");
 
-    /* Boot state array patching (primary for PE/COFF ABL) */
-    result->green_forced = patch_boot_state_array(data, size, &pe);
-    printf("\n");
-
-    /* Fallback: ADRL-based green forcing */
-    result->green_forced += patch_force_green_adrl(data, size, load_base);
-    printf("\n");
-
-    result->error_branches_noped =
-        patch_nop_error_branches(data, size, load_base);
-    printf("\n");
+    /*
+     * EFISP integration uses gbl_root_canoe after this pass.  Its patcher
+     * already handles the fake-lock/green state with anchored instruction
+     * patterns and data-flow tracking.  Do not repeat that work here:
+     * writing guessed raw string offsets into PE pointers and NOPing a
+     * nearby branch to any "red" string can make boot.efi unexecutable.
+     */
+    result->green_forced = 0;
+    result->error_branches_noped = 0;
+    printf("[efisp_safe] boot-state/green patch delegated to gbl_root_canoe\n");
+    printf("[efisp_safe] speculative red/error branch patch disabled\n\n");
 
     printf("=== Patch Summary ===\n");
     printf("  Verify functions short-circuited: %d\n",
