@@ -90,8 +90,10 @@ for device in $DEVICES; do
             candidates=$(sed -n 's/.*refusing ambiguous match: \([0-9][0-9]*\) candidate.*/\1/p' "$log" | tail -1)
             if [ -n "$candidates" ]; then
                 echo "WARN (ambiguous: $candidates candidates)"
+                echo "::warning title=$device ABL::AVB match refused: $candidates candidate functions"
             else
                 echo "WARN (no verified candidate)"
+                echo "::warning title=$device ABL::No verified AVB candidate function"
             fi
             sed -n '/\[short_circuit\]/p; /  -> function at/p' "$log" | sed 's/^/      /'
             SKIP=$((SKIP + 1))
