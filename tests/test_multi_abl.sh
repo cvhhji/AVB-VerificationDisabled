@@ -97,7 +97,7 @@ for device in $DEVICES; do
                 echo "WARN (no verified candidate)"
                 echo "::warning title=$device ABL::No verified AVB candidate function"
             fi
-            sed -n '/\[short_circuit\]/p; /  -> function at/p' "$log" | sed 's/^/      /'
+            sed -n '/\[short_circuit\]/p; /  -> /p' "$log" | sed 's/^/      /'
             SKIP=$((SKIP + 1))
         else
             echo "FAIL (rc=$rc)"
