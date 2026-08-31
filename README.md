@@ -5,7 +5,7 @@
 输出 `efisp/boot.efi` 与 `efisp/BOOTENTRIES`。
 
 与 [gbl_root_canoe](https://github.com/cvhhji/gbl_root_canoe) 假回锁配合，实现
-实现假回锁状态下允许修改镜像启动，同时伪装系统可见的 locked + green 状态。
+假回锁状态下允许修改镜像启动，同时伪装系统可见的 locked + green 状态。
 
 > **高风险实验项目。** EFI 生成成功不等于设备实机验证成功。刷写前必须保留原 efisp/abl 备份，
 > 确保有 fastboot/EDL 救砖路径。
@@ -17,9 +17,11 @@
 不同函数，其中包含解析器和启动参数生成逻辑；覆盖这些函数会破坏启动。
 
 新补丁不再提前返回或跳过 `avb_slot_verify()`，因为调用者仍需要它生成完整的
-`slot_data`。它识别 `avb_slot_verify()` 中独立 `vbmeta` 分区名引用及 flags 参数
-复制指令，把 `MOV Wd,W3` 改为 `ORR Wd,W3,#1`，设置 libavb 标准的
-`AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`。匹配不唯一时拒绝生成产物。
+`slot_data`。它先通过独立 `vbmeta` 分区名定位 `avb_slot_verify()`，再沿调用关系
+定位保存原始 flags 的外层函数入口，把外层的 `MOV Wd,W3` 改为
+`ORR Wd,W3,#1`，设置 libavb 标准的
+`AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`。这样验证调用和调用后的结果判断
+使用同一份 flags；任一层匹配不唯一时都拒绝生成产物。
 
 ## 构建
 

@@ -305,14 +305,34 @@ static int32_t patch_force_green_adrl(uint8_t *data, int32_t size,
     return patched;
 }
 
-/* ================================================================
- * Patch 3: Allow AVB verification errors while preserving slot_data
- * ================================================================ */
-static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
-                                          uint64_t load_base)
+static int32_t find_paciasp_start(const uint8_t *data, int32_t size,
+                                  int32_t from, int32_t max_scan)
 {
-    int32_t patch_sites[16];
-    int32_t nsites = 0;
+    int32_t start = from - max_scan;
+    if (start < 0) start = 0;
+    start &= ~3;
+    for (int32_t p = from & ~3; p >= start; p -= 4) {
+        if (p + 4 <= size && arm64_read(data, p) == 0xD503233FU)
+            return p;
+    }
+    return -1;
+}
+
+/* ================================================================
+ * Patch 3: Set ALLOW_VERIFICATION_ERROR in avb_slot_verify()'s caller
+ *
+ * Qualcomm's bundled libavb wrapper retains the original flags and checks
+ * bit 0 again after avb_slot_verify() returns.  Patching only the callee's
+ * local copy preserves slot_data, but the wrapper still rejects the result.
+ * Locate the callee from its standalone "vbmeta" reference, then follow BL
+ * callers back to a PACIASP function entry and patch that caller's saved W3.
+ * This makes both the call and the post-call decision see the same flag.
+ * ================================================================ */
+static int32_t patch_allow_verification_error(uint8_t *data, int32_t size,
+                                              uint64_t load_base)
+{
+    int32_t inner_sites[16];
+    int32_t ninner = 0;
     int32_t off = 0;
     while ((off = find_ascii(data, size, "vbmeta", off)) >= 0) {
         /* Require an independent, NUL-terminated partition-name string;
@@ -331,13 +351,13 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
                 if (end > size - 4) end = size - 4;
                 for (int32_t p = refs[r]; p <= end; p += 4) {
                     uint32_t ins = arm64_read(data, p);
-                    if ((ins & 0xFFFFFFE0U) == 0x2A0303E0U && nsites < 16) {
+                    if ((ins & 0xFFFFFFE0U) == 0x2A0303E0U && ninner < 16) {
                         bool dup = false;
-                        for (int i = 0; i < nsites; i++)
-                            if (patch_sites[i] == p) { dup = true; break; }
+                        for (int i = 0; i < ninner; i++)
+                            if (inner_sites[i] == p) { dup = true; break; }
                         if (!dup) {
-                            patch_sites[nsites++] = p;
-                            printf("[avb_allow_error] vbmeta ref 0x%X -> flags copy 0x%X\n",
+                            inner_sites[ninner++] = p;
+                            printf("[avb_allow_error] vbmeta ref 0x%X -> inner flags copy 0x%X\n",
                                    refs[r], p);
                         }
                     }
@@ -347,18 +367,56 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
         off += 6;
     }
 
-    if (nsites != 1) {
-        printf("[avb_allow_error] refusing match: %d flag-copy candidates\n",
-               nsites);
+    if (ninner != 1) {
+        printf("[avb_allow_error] refusing match: %d inner flag-copy candidates\n",
+               ninner);
         return 0;
     }
 
-    int32_t site = patch_sites[0];
+    int32_t inner_start = find_paciasp_start(data, size, inner_sites[0], 512);
+    if (inner_start < 0) {
+        printf("[avb_allow_error] refusing match: inner PACIASP entry not found\n");
+        return 0;
+    }
+
+    int32_t outer_sites[16];
+    int32_t nouter = 0;
+    for (int32_t p = 0; p + 4 <= size; p += 4) {
+        uint32_t ins = arm64_read(data, p);
+        if (!arm64_is_bl(ins) || arm64_branch_target(p, ins) != inner_start)
+            continue;
+
+        int32_t caller = find_paciasp_start(data, size, p, 16384);
+        if (caller < 0 || caller == inner_start) continue; /* recursive call */
+
+        int32_t end = caller + 128;
+        if (end > p) end = p;
+        for (int32_t q = caller + 4; q <= end; q += 4) {
+            uint32_t save = arm64_read(data, q);
+            if ((save & 0xFFFFFFE0U) != 0x2A0303E0U) continue;
+            bool dup = false;
+            for (int i = 0; i < nouter; i++)
+                if (outer_sites[i] == q) { dup = true; break; }
+            if (!dup && nouter < 16) {
+                outer_sites[nouter++] = q;
+                printf("[avb_allow_error] BL 0x%X -> outer flags copy 0x%X\n",
+                       p, q);
+            }
+        }
+    }
+
+    if (nouter != 1) {
+        printf("[avb_allow_error] refusing match: %d outer flag-copy candidates\n",
+               nouter);
+        return 0;
+    }
+
+    int32_t site = outer_sites[0];
     uint32_t orig = arm64_read(data, site);
     uint8_t rd = arm64_rd(orig);
     uint32_t patched = 0x32000060U | rd; /* ORR Wd,W3,#1 */
     arm64_write(data, site, patched);
-    printf("[avb_allow_error] patched 0x%X: %08X -> %08X (flags |= 1)\n",
+    printf("[avb_allow_error] patched outer caller 0x%X: %08X -> %08X (flags |= 1)\n",
            site, orig, patched);
     return 1;
 }
@@ -448,7 +506,7 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
 
     /* Apply patches */
     result->verify_shortcircuited =
-        patch_short_circuit_verify(data, size, load_base);
+        patch_allow_verification_error(data, size, load_base);
     printf("\n");
 
     /*
