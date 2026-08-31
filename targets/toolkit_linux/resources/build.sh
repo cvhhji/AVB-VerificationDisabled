@@ -5,7 +5,7 @@ SCRIPTDIR=$(dirname "$0")
 cd "$SCRIPTDIR"
 mkdir -p efisp
 
-echo "=== ABL Toolkit: AVB Disable + Fake Re-lock (Linux) ==="
+echo "=== Safe EFISP Loader + Fake Re-lock (Linux) ==="
 echo ""
 
 if [ ! -f images/abl.img ]; then
@@ -14,7 +14,7 @@ if [ ! -f images/abl.img ]; then
   exit 1
 fi
 
-echo "[1/3] Extracting ABL ELF from abl.img..."
+echo "[1/2] Extracting Android LinuxLoader from abl.img..."
 ./bin/extractfv -o ./ images/abl.img
 
 if [ ! -f LinuxLoader.efi ]; then
@@ -26,22 +26,8 @@ mv -f LinuxLoader.efi ABL_original.efi
 echo "  Original ABL saved as ABL_original.efi"
 
 echo ""
-echo "[2/3] Applying AVB verification disable patch..."
-if ! ./bin/patch_abl_avb ABL_original.efi ABL_avb.efi; then
-  echo ""
-  echo "ERROR: patch_abl_avb (AVB disable) failed"
-  exit 1
-fi
-
-if [ ! -f ABL_avb.efi ] || [ ! -s ABL_avb.efi ]; then
-  echo "ERROR: patch_abl_avb produced no output"
-  exit 1
-fi
-echo "  AVB disable applied: ABL_avb.efi"
-
-echo ""
-echo "[3/3] Applying fake re-lock patch (gbl patch_abl)..."
-if ! ./bin/patch_abl ABL_avb.efi efisp/boot.efi; then
+echo "[2/2] Applying gbl_root_canoe fake re-lock patch..."
+if ! ./bin/patch_abl ABL_original.efi efisp/boot.efi; then
   echo ""
   echo "ERROR: gbl patch_abl (fake re-lock) failed"
   exit 1
@@ -56,7 +42,7 @@ echo "  Fake re-lock applied: efisp/boot.efi"
 echo ""
 echo "========================================"
 echo "Done. Outputs:"
-echo "  efisp/boot.efi   - EFISP Android loader (AVB disabled + fake re-lock)"
-echo "  ABL_avb.efi        - after AVB disable only (intermediate)"
+echo "  efisp/boot.efi   - safe EFISP Android loader + fake re-lock"
+echo "                     (AVB follows the device's real unlock state)"
 echo "  ABL_original.efi   - original unpatched ABL (backup)"
 echo "========================================"

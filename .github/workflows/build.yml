@@ -87,6 +87,27 @@ jobs:
         run: XZ_SRC=/tmp/xz-src make -C targets/toolkit_android
       - name: Build Windows toolkit
         run: XZ_SRC=/tmp/xz-src make -C targets/toolkit_windows
+      - name: Generate device-specific safe EFISP loaders
+        run: |
+          set -euo pipefail
+          GBL_RAW=https://raw.githubusercontent.com/cvhhji/gbl_root_canoe/main
+          DEVICES="CPH2841 OPD2513 PLK110 PLR110 PLZ110 PMA120 myron nezha nezha_global pandora popsicle pudding"
+          mkdir -p out/safe_efisp
+          for device in $DEVICES; do
+            work="/tmp/safe-$device"
+            mkdir -p "$work/extracted" "out/safe_efisp/$device/efisp"
+            curl -fsSL "$GBL_RAW/ablrepo/$device/abl.img" -o "$work/abl.img"
+            targets/toolkit_linux/build/toolkit/bin/extractfv -o "$work/extracted" "$work/abl.img"
+            test -s "$work/extracted/LinuxLoader.efi"
+            targets/toolkit_linux/build/toolkit/bin/patch_abl \
+              "$work/extracted/LinuxLoader.efi" \
+              "out/safe_efisp/$device/efisp/boot.efi"
+            test -s "out/safe_efisp/$device/efisp/boot.efi"
+            cp targets/toolkit_linux/resources/efisp/BOOTENTRIES \
+              "out/safe_efisp/$device/efisp/BOOTENTRIES"
+            sha256sum "out/safe_efisp/$device/efisp/boot.efi" \
+              > "out/safe_efisp/$device/efisp/boot.efi.sha256"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: toolkit_linux
@@ -101,4 +122,9 @@ jobs:
         with:
           name: toolkit_windows
           path: targets/toolkit_windows/build/toolkit/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safe_efisp_loaders
+          path: out/safe_efisp/
           if-no-files-found: error
