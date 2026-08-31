@@ -95,4 +95,8 @@ done
 
 echo ""
 echo "[3/3] Results: PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+if [ "$PASS" -eq 0 ]; then
+    echo "FAIL: no ABL sample produced a verified patch"
+    exit 1
+fi
 [ "$FAIL" -eq 0 ]

@@ -19,7 +19,9 @@ jobs:
           mkdir -p out
           cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
       - name: Run unit tests
-        run: bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
+        run: |
+          bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
+          bash tests/test_efisp_layout.sh
       - name: Install extractfv deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends liblzma-dev curl
       - name: Multi-ABL patch test
