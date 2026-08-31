@@ -81,8 +81,14 @@ for device in $DEVICES; do
         if [ -f "$output" ] && [ -s "$output" ]; then
             in_size=$(wc -c < "$elf" | tr -d ' ')
             out_size=$(wc -c < "$output" | tr -d ' ')
-            echo "PASS (${in_size} -> ${out_size})"
-            PASS=$((PASS + 1))
+            diff_count=$(cmp -l "$elf" "$output" | wc -l | tr -d ' ')
+            if [ "$in_size" = "$out_size" ] && [ "$diff_count" -eq 4 ]; then
+                echo "PASS (${in_size} bytes, 1 instruction / 4 bytes changed)"
+                PASS=$((PASS + 1))
+            else
+                echo "FAIL (size ${in_size}->${out_size}, changed bytes=$diff_count)"
+                FAIL=$((FAIL + 1))
+            fi
         else
             echo "FAIL (empty output)"
             FAIL=$((FAIL + 1))
