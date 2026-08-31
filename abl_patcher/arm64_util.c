@@ -92,20 +92,22 @@ bool arm64_is_and_imm(uint32_t instr)
 
 bool arm64_is_tst_imm(uint32_t instr)
 {
-    /* TST = ANDS XZR, Xn, #imm: pattern 0xF2400000 (64-bit) */
-    return (instr & 0xFF80001F) == 0xF240001F;
+    /* TST = ANDS WZR/XZR, Wn/Xn, #imm.  Bit 22 (N) is part of the
+     * logical-immediate value, so it must not appear in the comparison. */
+    return (instr & 0xFF80001F) == 0xF200001F ||
+           (instr & 0xFF80001F) == 0x7200001F;
 }
 
 bool arm64_is_cbz(uint32_t instr)
 {
     /* CBZ: 0 0 1 1 0 1 0 imm19 Rt  (32-bit 0x34000000, 64-bit 0xB4000000) */
-    return (instr & 0x7E000000) == 0x34000000;
+    return (instr & 0x7F000000) == 0x34000000;
 }
 
 bool arm64_is_cbnz(uint32_t instr)
 {
     /* CBNZ: 0 0 1 1 0 1 1 imm19 Rt (32-bit 0x35000000, 64-bit 0xB5000000) */
-    return (instr & 0x7E000000) == 0x35000000;
+    return (instr & 0x7F000000) == 0x35000000;
 }
 
 bool arm64_is_b_cond(uint32_t instr)

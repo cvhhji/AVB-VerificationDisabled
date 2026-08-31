@@ -20,6 +20,10 @@ jobs:
           cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
       - name: Run unit tests
         run: |
+          cc -O2 -Wall -Wextra -std=c11 -Iabl_patcher \
+            tests/test_arm64_util.c abl_patcher/arm64_util.c \
+            -o /tmp/test_arm64_util
+          /tmp/test_arm64_util
           bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
           bash tests/test_efisp_layout.sh
       - name: Install extractfv deps

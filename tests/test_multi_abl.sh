@@ -71,7 +71,8 @@ for device in $DEVICES; do
 
     # Run patcher
     output="$WORK_DIR/${device}_patched.efi"
-    if "$PATCHER" "$elf" "$output" >/dev/null 2>&1; then
+    log="$WORK_DIR/${device}_patch.log"
+    if "$PATCHER" "$elf" "$output" >"$log" 2>&1; then
         if [ -f "$output" ] && [ -s "$output" ]; then
             in_size=$(wc -c < "$elf" | tr -d ' ')
             out_size=$(wc -c < "$output" | tr -d ' ')
@@ -84,10 +85,17 @@ for device in $DEVICES; do
     else
         rc=$?
         if [ "$rc" -eq 2 ]; then
-            echo "WARN (no patches applied)"
+            candidates=$(sed -n 's/.*refusing ambiguous match: \([0-9][0-9]*\) candidate.*/\1/p' "$log" | tail -1)
+            if [ -n "$candidates" ]; then
+                echo "WARN (ambiguous: $candidates candidates)"
+            else
+                echo "WARN (no verified candidate)"
+            fi
+            sed -n '/\[short_circuit\]/p; /  -> function at/p' "$log" | sed 's/^/      /'
             SKIP=$((SKIP + 1))
         else
             echo "FAIL (rc=$rc)"
+            sed 's/^/      /' "$log"
             FAIL=$((FAIL + 1))
         fi
     fi
