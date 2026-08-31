@@ -26,9 +26,9 @@ mv -f LinuxLoader.efi ABL_original.efi
 echo "  Original ABL saved as ABL_original.efi"
 
 echo ""
-echo "[2/3] Disabling the AVB2 verification route..."
+echo "[2/3] Allowing AVB verification errors..."
 if ! ./bin/patch_abl_avb ABL_original.efi ABL_avb.efi; then
-  echo "ERROR: unique AVB2 route was not found; refusing unsafe output"
+  echo "ERROR: unique AVB flags site was not found; refusing unsafe output"
   exit 1
 fi
 
@@ -48,6 +48,6 @@ echo "  Fake re-lock applied: efisp/boot.efi"
 echo ""
 echo "========================================"
 echo "Done. Outputs:"
-echo "  efisp/boot.efi   - EFISP loader: AVB2 route disabled + fake re-lock"
+echo "  efisp/boot.efi   - EFISP loader: AVB errors allowed + fake re-lock"
 echo "  ABL_original.efi   - original unpatched ABL (backup)"
 echo "========================================"

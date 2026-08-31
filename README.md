@@ -1,11 +1,11 @@
 # AVB-VerificationDisabled
 
 高通设备 EFISP Android loader 工具包。从原始 `abl.img` 提取
-`LinuxLoader.efi`，关闭 AVB2 路由后再应用 gbl_root_canoe 的假回锁补丁，
+`LinuxLoader.efi`，允许 AVB 校验错误后再应用 gbl_root_canoe 的假回锁补丁，
 输出 `efisp/boot.efi` 与 `efisp/BOOTENTRIES`。
 
 与 [gbl_root_canoe](https://github.com/cvhhji/gbl_root_canoe) 假回锁配合，实现
-实现假回锁状态下绕过 AVB2 校验路径，同时伪装系统可见的 locked + green 状态。
+实现假回锁状态下允许修改镜像启动，同时伪装系统可见的 locked + green 状态。
 
 > **高风险实验项目。** EFI 生成成功不等于设备实机验证成功。刷写前必须保留原 efisp/abl 备份，
 > 确保有 fastboot/EDL 救砖路径。
@@ -16,9 +16,10 @@
 `androidboot.vbmeta` 字符串引用猜测验证函数。真实样本中每份会命中 7–9 个
 不同函数，其中包含解析器和启动参数生成逻辑；覆盖这些函数会破坏启动。
 
-新补丁不再修改这些候选。它只识别 `Is_VERIFIED_BOOT_2()` 风格的路由函数：
-该函数在入口附近引用独立、NUL 结尾的 `vbmeta` 分区名。只有恰好找到一个
-候选时才令其返回 false，进入 ABL 的 `NO_AVB` 路径；否则拒绝生成产物。
+新补丁不再提前返回或跳过 `avb_slot_verify()`，因为调用者仍需要它生成完整的
+`slot_data`。它识别 `avb_slot_verify()` 中独立 `vbmeta` 分区名引用及 flags 参数
+复制指令，把 `MOV Wd,W3` 改为 `ORR Wd,W3,#1`，设置 libavb 标准的
+`AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`。匹配不唯一时拒绝生成产物。
 
 ## 构建
 
@@ -61,7 +62,7 @@ make test
 - 依赖 ABL 中存在特定的 boot-state 字符串和 AVB 校验函数模式；不同版本/厂商可能需要调整匹配模式。
 - 不修改 vbmeta 分区，不签名镜像，不修改 KeyMint/TEE 证明结果。
 - `boot.efi` 只能放进 gbl_root_canoe 的 EFISP 文件目录，不能直接刷入 abl。
-- AVB2 路由签名必须唯一命中；零匹配或多匹配都会拒绝生成输出。
+- AVB flags 签名必须唯一命中；零匹配或多匹配都会拒绝生成输出。
 
 ## 来源与许可
 

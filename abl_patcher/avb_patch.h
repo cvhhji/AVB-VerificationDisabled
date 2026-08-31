@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Core logic for routing Qualcomm ABL around AVB2 verification.
+ * Core logic for allowing Qualcomm ABL AVB verification errors while
+ * preserving the verified slot data needed to continue booting.
  *
  * Fake-relock/green handling is applied separately by gbl_root_canoe.
  */

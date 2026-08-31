@@ -306,13 +306,13 @@ static int32_t patch_force_green_adrl(uint8_t *data, int32_t size,
 }
 
 /* ================================================================
- * Patch 3: Route around AVB2 verification
+ * Patch 3: Allow AVB verification errors while preserving slot_data
  * ================================================================ */
 static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
                                           uint64_t load_base)
 {
-    int32_t func_starts[16];
-    int32_t nfuncs = 0;
+    int32_t patch_sites[16];
+    int32_t nsites = 0;
     int32_t off = 0;
     while ((off = find_ascii(data, size, "vbmeta", off)) >= 0) {
         /* Require an independent, NUL-terminated partition-name string;
@@ -323,20 +323,23 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
             int32_t nrefs = find_adrl_refs(data, size, load_base,
                                            (int64_t)off, refs, MAX_REFS);
             for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                int32_t fstart = arm64_find_function_start(
-                    data, size, refs[r], 4096);
-                /* Is_VERIFIED_BOOT_2 references the vbmeta partition at the
-                 * beginning of a small routing function.  Other vbmeta
-                 * consumers reference it much later in their functions. */
-                if (fstart >= 0 && refs[r] >= fstart &&
-                    refs[r] - fstart <= 16 && nfuncs < 16) {
-                    bool dup = false;
-                    for (int i = 0; i < nfuncs; i++)
-                        if (func_starts[i] == fstart) { dup = true; break; }
-                    if (!dup) {
-                        func_starts[nfuncs++] = fstart;
-                        printf("[avb2_route] vbmeta ref 0x%X -> func 0x%X\n",
-                               refs[r], fstart);
+                /* avb_slot_verify() references the standalone vbmeta name
+                 * near its entry and then saves flags argument W3 with
+                 * MOV Wd,W3 (ORR Wd,WZR,W3).  Preserve the destination but
+                 * OR in ALLOW_VERIFICATION_ERROR (bit 0). */
+                int32_t end = refs[r] + 128;
+                if (end > size - 4) end = size - 4;
+                for (int32_t p = refs[r]; p <= end; p += 4) {
+                    uint32_t ins = arm64_read(data, p);
+                    if ((ins & 0xFFFFFFE0U) == 0x2A0303E0U && nsites < 16) {
+                        bool dup = false;
+                        for (int i = 0; i < nsites; i++)
+                            if (patch_sites[i] == p) { dup = true; break; }
+                        if (!dup) {
+                            patch_sites[nsites++] = p;
+                            printf("[avb_allow_error] vbmeta ref 0x%X -> flags copy 0x%X\n",
+                                   refs[r], p);
+                        }
                     }
                 }
             }
@@ -344,20 +347,19 @@ static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
         off += 6;
     }
 
-    if (nfuncs != 1) {
-        printf("[avb2_route] refusing match: %d routing candidates\n",
-               nfuncs);
+    if (nsites != 1) {
+        printf("[avb_allow_error] refusing match: %d flag-copy candidates\n",
+               nsites);
         return 0;
     }
 
-    int32_t fstart = func_starts[0];
-    if (fstart + 8 > size) return 0;
-    uint32_t orig0 = arm64_read(data, fstart);
-    uint32_t orig1 = arm64_read(data, fstart + 4);
-    arm64_write(data, fstart, arm64_mov_x0_zero());
-    arm64_write(data, fstart + 4, arm64_ret());
-    printf("[avb2_route] patched 0x%X: %08X %08X -> FALSE ; RET\n",
-           fstart, orig0, orig1);
+    int32_t site = patch_sites[0];
+    uint32_t orig = arm64_read(data, site);
+    uint8_t rd = arm64_rd(orig);
+    uint32_t patched = 0x32000060U | rd; /* ORR Wd,W3,#1 */
+    arm64_write(data, site, patched);
+    printf("[avb_allow_error] patched 0x%X: %08X -> %08X (flags |= 1)\n",
+           site, orig, patched);
     return 1;
 }
 
