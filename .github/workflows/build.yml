@@ -39,6 +39,8 @@ jobs:
             cat /tmp/multi-abl.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          diagnostic=$(grep -E '^  |^\[3/3\] Results:' /tmp/multi-abl.log | tr '\n' ';' | sed 's/;$//')
+          echo "::error title=Multi-ABL candidate summary::$diagnostic"
           exit "$rc"
       - uses: actions/upload-artifact@v4
         with:
