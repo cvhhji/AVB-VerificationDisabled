@@ -61,10 +61,12 @@ for device in $DEVICES; do
         continue
     fi
 
-    # Find extracted EFI
-    elf=$(find "$elf_dir" -type f -name "*.efi" 2>/dev/null | head -1)
+    # Patch the Android ABL application, not an arbitrary EFI from the FV.
+    # extractfv names the relevant module LinuxLoader.efi; using `head -1`
+    # previously tested an unrelated module and produced false zero matches.
+    elf=$(find "$elf_dir" -type f -name "LinuxLoader.efi" 2>/dev/null | head -1)
     if [ -z "$elf" ] || [ ! -s "$elf" ]; then
-        echo "SKIP (no EFI extracted)"
+        echo "SKIP (no LinuxLoader.efi extracted)"
         SKIP=$((SKIP + 1))
         continue
     fi
