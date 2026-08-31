@@ -27,7 +27,8 @@
 make
 ```
 
-Actions 产物包括三平台工具包和按设备分类的 `safe_efisp_loaders`。
+Actions 只发布 Linux、Android 和 Windows 三个平台工具包。把自己设备当前
+版本的 `abl.img` 放入工具包后在本地生成 `efisp/boot.efi`。
 
 ## 使用
 
