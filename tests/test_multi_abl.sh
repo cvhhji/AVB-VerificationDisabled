@@ -55,7 +55,9 @@ for device in $DEVICES; do
 
     # Extract PE/ELF
     rm -rf "$elf_dir"
-    if ! "$WORK_DIR/extractfv" -o "$elf_dir" -e pe32 "$img" >/dev/null 2>&1; then
+    # Default mode deliberately selects the largest PE and names it
+    # LinuxLoader.efi, matching all three user-facing toolkit scripts.
+    if ! "$WORK_DIR/extractfv" -o "$elf_dir" "$img" >/dev/null 2>&1; then
         echo "SKIP (extract failed)"
         SKIP=$((SKIP + 1))
         continue
