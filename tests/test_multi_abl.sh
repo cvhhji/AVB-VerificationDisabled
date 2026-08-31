@@ -5,6 +5,7 @@ set -eu
 
 PATCHER="${1:-abl_patcher/patch_abl_avb}"
 WORK_DIR="${2:-/tmp/abl_multi_test}"
+EXPECT_ALL_PATCHED="${3:-0}"
 GBL_RAW="https://raw.githubusercontent.com/cvhhji/gbl_root_canoe/main"
 
 DEVICES="CPH2841 OPD2513 PLK110 PLR110 PLZ110 PMA120 myron nezha nezha_global pandora popsicle pudding"
@@ -55,28 +56,39 @@ for device in $DEVICES; do
 
     # Extract PE/ELF
     rm -rf "$elf_dir"
-    if ! "$WORK_DIR/extractfv" -o "$elf_dir" -e pe32 "$img" >/dev/null 2>&1; then
+    # Default mode deliberately selects the largest PE and names it
+    # LinuxLoader.efi, matching all three user-facing toolkit scripts.
+    if ! "$WORK_DIR/extractfv" -o "$elf_dir" "$img" >/dev/null 2>&1; then
         echo "SKIP (extract failed)"
         SKIP=$((SKIP + 1))
         continue
     fi
 
-    # Find extracted EFI
-    elf=$(find "$elf_dir" -type f -name "*.efi" 2>/dev/null | head -1)
+    # Patch the Android ABL application, not an arbitrary EFI from the FV.
+    # extractfv names the relevant module LinuxLoader.efi; using `head -1`
+    # previously tested an unrelated module and produced false zero matches.
+    elf=$(find "$elf_dir" -type f -name "LinuxLoader.efi" 2>/dev/null | head -1)
     if [ -z "$elf" ] || [ ! -s "$elf" ]; then
-        echo "SKIP (no EFI extracted)"
+        echo "SKIP (no LinuxLoader.efi extracted)"
         SKIP=$((SKIP + 1))
         continue
     fi
 
     # Run patcher
     output="$WORK_DIR/${device}_patched.efi"
-    if "$PATCHER" "$elf" "$output" >/dev/null 2>&1; then
+    log="$WORK_DIR/${device}_patch.log"
+    if "$PATCHER" "$elf" "$output" >"$log" 2>&1; then
         if [ -f "$output" ] && [ -s "$output" ]; then
             in_size=$(wc -c < "$elf" | tr -d ' ')
             out_size=$(wc -c < "$output" | tr -d ' ')
-            echo "PASS (${in_size} -> ${out_size})"
-            PASS=$((PASS + 1))
+            diff_count=$(cmp -l "$elf" "$output" | wc -l | tr -d ' ')
+            if [ "$in_size" = "$out_size" ] && [ "$diff_count" -eq 8 ]; then
+                echo "PASS (${in_size} bytes, 2 instructions / 8 bytes changed)"
+                PASS=$((PASS + 1))
+            else
+                echo "FAIL (size ${in_size}->${out_size}, changed bytes=$diff_count)"
+                FAIL=$((FAIL + 1))
+            fi
         else
             echo "FAIL (empty output)"
             FAIL=$((FAIL + 1))
@@ -84,10 +96,23 @@ for device in $DEVICES; do
     else
         rc=$?
         if [ "$rc" -eq 2 ]; then
-            echo "WARN (no patches applied)"
+            candidates=$(sed -n 's/.*refusing ambiguous match: \([0-9][0-9]*\) candidate.*/\1/p' "$log" | tail -1)
+            if [ -n "$candidates" ]; then
+                echo "WARN (ambiguous: $candidates candidates)"
+                if [ "$EXPECT_ALL_PATCHED" != "1" ]; then
+                    echo "::warning title=$device ABL::AVB match refused: $candidates candidate functions"
+                fi
+            else
+                echo "WARN (no verified candidate)"
+                if [ "$EXPECT_ALL_PATCHED" != "1" ]; then
+                    echo "::warning title=$device ABL::No verified AVB candidate function"
+                fi
+            fi
+            sed -n '/\[short_circuit\]/p; /  -> /p' "$log" | sed 's/^/      /'
             SKIP=$((SKIP + 1))
         else
             echo "FAIL (rc=$rc)"
+            sed 's/^/      /' "$log"
             FAIL=$((FAIL + 1))
         fi
     fi
@@ -95,4 +120,16 @@ done
 
 echo ""
 echo "[3/3] Results: PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+if [ "$EXPECT_ALL_PATCHED" = "1" ]; then
+    if [ "$PASS" -ne 12 ] || [ "$FAIL" -ne 0 ] || [ "$SKIP" -ne 0 ]; then
+        echo "FAIL: AVB2 route patch must uniquely match all 12 known ABL samples"
+        exit 1
+    fi
+    echo "PASS: AVB2 route patch uniquely matched all known ABL samples"
+    exit 0
+fi
+if [ "$PASS" -eq 0 ]; then
+    echo "FAIL: no ABL sample produced a verified patch"
+    exit 1
+fi
 [ "$FAIL" -eq 0 ]

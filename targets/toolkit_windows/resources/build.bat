@@ -1,8 +1,9 @@
 @echo off
 chcp 65001 >nul
 cd /d %~dp0
+if not exist efisp mkdir efisp
 
-echo === ABL Toolkit: AVB Disable + Fake Re-lock (Windows) ===
+echo === Safe EFISP Loader + Fake Re-lock (Windows) ===
 echo.
 
 if not exist images\abl.img (
@@ -11,7 +12,7 @@ if not exist images\abl.img (
   exit /b 1
 )
 
-echo [1/3] Extracting ABL ELF from abl.img...
+echo [1/2] Extracting Android LinuxLoader from abl.img...
 bin\extractfv.exe -o . images\abl.img
 if errorlevel 1 (
   echo ERROR: extractfv failed
@@ -27,39 +28,30 @@ move /Y LinuxLoader.efi ABL_original.efi >nul
 echo   Original ABL saved as ABL_original.efi
 
 echo.
-echo [2/3] Applying AVB verification disable patch...
+echo [2/3] Allowing AVB verification errors...
 bin\patch_abl_avb.exe ABL_original.efi ABL_avb.efi
 if errorlevel 1 (
-  echo.
-  echo ERROR: patch_abl_avb AVB disable failed
+  echo ERROR: unique AVB flags site was not found; refusing unsafe output
   exit /b 1
 )
 
-if not exist ABL_avb.efi (
-  echo ERROR: patch_abl_avb produced no output
-  exit /b 1
-)
-echo   AVB disable applied: ABL_avb.efi
-
-echo.
-echo [3/3] Applying fake re-lock patch (gbl patch_abl)...
-bin\patch_abl.exe ABL_avb.efi ABL_patched.efi
+echo [3/3] Applying gbl_root_canoe fake re-lock patch...
+bin\patch_abl.exe ABL_avb.efi efisp\boot.efi
 if errorlevel 1 (
   echo.
   echo ERROR: gbl patch_abl fake re-lock failed
   exit /b 1
 )
 
-if not exist ABL_patched.efi (
+if not exist efisp\boot.efi (
   echo ERROR: patch_abl produced no output
   exit /b 1
 )
-echo   Fake re-lock applied: ABL_patched.efi
+echo   Fake re-lock applied: efisp\boot.efi
 
 echo.
 echo ========================================
 echo Done. Outputs:
-echo   ABL_patched.efi   - final ABL (AVB disabled + fake re-lock)
-echo   ABL_avb.efi        - after AVB disable only (intermediate)
+echo   efisp\boot.efi   - EFISP loader: AVB errors allowed + fake re-lock
 echo   ABL_original.efi   - original unpatched ABL (backup)
 echo ========================================

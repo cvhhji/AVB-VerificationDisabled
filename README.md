@@ -1,26 +1,28 @@
 # AVB-VerificationDisabled
 
-BL-stage ABL AVB 校验关闭工具。对高通 ABL ELF 打补丁，在 bootloader 层面短路 AVB 校验、
-强制 `verifiedbootstate=green`，使修改过的 boot/init_boot 镜像能通过 ABL 校验并正常启动。
+高通设备 EFISP Android loader 工具包。从原始 `abl.img` 提取
+`LinuxLoader.efi`，允许 AVB 校验错误后再应用 gbl_root_canoe 的假回锁补丁，
+输出 `efisp/boot.efi` 与 `efisp/BOOTENTRIES`。
 
 与 [gbl_root_canoe](https://github.com/cvhhji/gbl_root_canoe) 假回锁配合，实现
-**假回锁状态下关闭 AVB 且正常开机，且不被系统发现 BL 已解锁**。
+假回锁状态下允许修改镜像启动，同时伪装系统可见的 locked + green 状态。
 
-> **高风险实验项目。** patch 成功不等于适配所有 ABL 版本。刷写前必须保留原 abl 分区备份，
+> **高风险实验项目。** EFI 生成成功不等于设备实机验证成功。刷写前必须保留原 efisp/abl 备份，
 > 确保有 fastboot/EDL 救砖路径。
 
 ## 原理
 
-对 ABL ELF 应用三类补丁：
+仓库中的实验性 `patch_abl_avb` 曾按 `AVB0`、`vbmeta` 和
+`androidboot.vbmeta` 字符串引用猜测验证函数。真实样本中每份会命中 7–9 个
+不同函数，其中包含解析器和启动参数生成逻辑；覆盖这些函数会破坏启动。
 
-| 补丁 | 作用 |
-|------|------|
-| 强制 verifiedbootstate=green | 将 orange/yellow/red 字符串引用重定向到 green，隐藏解锁状态 |
-| 短路 AVB 校验入口 | 校验函数直接返回成功，跳过 boot/init_boot/vendor_boot/dtbo 校验 |
-| NOP 错误分支 | 消除跳转到 red/error 状态的条件分支，防止启动失败画面 |
-
-结果：ABL 报告 `device_state=locked` + `verifiedbootstate=green`（与真锁完全一致），
-但不执行任何校验，修改过的镜像可正常启动。
+新补丁不再提前返回或跳过 `avb_slot_verify()`，因为调用者仍需要它生成完整的
+`slot_data`。它使用 libavb 的唯一诊断字符串定位 `avb_slot_verify()`，并采用
+gbl-chainload 的 patch10 双补丁：把入口的 `MOV Wd,W3` 改为
+`ORR Wd,W3,#1`，设置 `AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`；同时把
+公共出口返回值改为 `AVB_SLOT_VERIFY_RESULT_OK`。前者让 libavb 在校验失败时仍
+构造完整 `slot_data`，后者避免假回锁后的 ABL 上层把非零验证结果判为致命错误。
+任一签名匹配不唯一时都拒绝生成产物。
 
 ## 构建
 
@@ -30,21 +32,18 @@ BL-stage ABL AVB 校验关闭工具。对高通 ABL ELF 打补丁，在 bootload
 make
 ```
 
-产物：`out/patch_abl_avb`
+Actions 只发布 Linux、Android 和 Windows 三个平台工具包。把自己设备当前
+版本的 `abl.img` 放入工具包后在本地生成 `efisp/boot.efi`。
 
 ## 使用
 
 ```bash
-# 1. 从 abl 分区提取 ABL ELF（使用 gbl_root_canoe 的 extractfv）
-extractfv abl.img abl.elf
+# 将当前设备的 abl 分区镜像放入工具包
+cp abl.img images/abl.img
+./build.sh
 
-# 2. 应用假回锁补丁（gbl_root_canoe）
-patch_abl abl.elf abl_relocked.elf
-
-# 3. 应用 BL-stage AVB 补丁（本工具）
-out/patch_abl_avb abl_relocked.elf abl_final.elf
-
-# 4. 重新打包并刷入 abl 分区
+# 把生成的 efisp 目录部署到 persist 中 gbl_root_canoe 使用的位置；
+# 不要把 boot.efi 直接刷进 abl 分区。
 ```
 
 可选参数 `--load-base 0xADDR`：指定文件偏移 0 对应的运行时地址（从 FV 提取的 ABL 通常为 0）。
@@ -65,7 +64,8 @@ make test
 - 仅支持高通 ABL（UEFI 应用），不支持其他厂商 bootloader。
 - 依赖 ABL 中存在特定的 boot-state 字符串和 AVB 校验函数模式；不同版本/厂商可能需要调整匹配模式。
 - 不修改 vbmeta 分区，不签名镜像，不修改 KeyMint/TEE 证明结果。
-- patch 后的 ABL 仍需与 gbl_root_canoe 假回锁 BDS 配合使用。
+- `boot.efi` 只能放进 gbl_root_canoe 的 EFISP 文件目录，不能直接刷入 abl。
+- AVB 函数入口、flags 和公共出口签名必须唯一命中；零匹配或多匹配都会拒绝生成输出。
 
 ## 来源与许可
 

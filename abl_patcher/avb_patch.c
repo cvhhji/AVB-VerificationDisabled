@@ -305,79 +305,122 @@ static int32_t patch_force_green_adrl(uint8_t *data, int32_t size,
     return patched;
 }
 
-/* ================================================================
- * Patch 3: Short-circuit AVB verification entry
- * ================================================================ */
-static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
-                                          uint64_t load_base)
+static int32_t find_paciasp_start(const uint8_t *data, int32_t size,
+                                  int32_t from, int32_t max_scan)
 {
-    int32_t patched = 0;
-    int32_t func_starts[16];
-    int32_t nfuncs = 0;
+    int32_t start = from - max_scan;
+    if (start < 0) start = 0;
+    start &= ~3;
+    for (int32_t p = from & ~3; p >= start; p -= 4) {
+        if (p + 4 <= size && arm64_read(data, p) == 0xD503233FU)
+            return p;
+    }
+    return -1;
+}
 
-    const uint8_t avb0[] = { 'A', 'V', 'B', '0' };
-    int32_t off = 0;
-    while ((off = find_mem(data, size, avb0, 4, off)) >= 0) {
-        printf("[short_circuit] 'AVB0' at offset 0x%X\n", off);
-        int32_t refs[MAX_REFS];
-        int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                       (int64_t)off, refs, MAX_REFS);
-        for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-            int32_t fstart = arm64_find_function_start(
-                data, size, refs[r], 4096);
-            if (fstart >= 0) {
-                bool dup = false;
-                for (int i = 0; i < nfuncs; i++)
-                    if (func_starts[i] == fstart) { dup = true; break; }
-                if (!dup && nfuncs < 16) {
-                    func_starts[nfuncs++] = fstart;
-                    printf("  -> function at 0x%X (ref 0x%X)\n",
-                           fstart, refs[r]);
-                }
-            }
+/* ================================================================
+ * Patch 3: libavb force-success pair
+ *
+ * This follows gbl-chainload patch10.  ALLOW_VERIFICATION_ERROR makes
+ * libavb populate slot_data, but libavb deliberately still returns the
+ * verification error.  A locked/fake-locked ABL rejects that non-zero result.
+ * Therefore both rewrites are required in avb_slot_verify():
+ *   10a. saved flags |= ALLOW_VERIFICATION_ERROR
+ *   10c. common return value = AVB_SLOT_VERIFY_RESULT_OK
+ * ================================================================ */
+static int32_t patch_allow_verification_error(uint8_t *data, int32_t size,
+                                              uint64_t load_base)
+{
+    static const uint8_t anchor[] =
+        "Persistent values required for "
+        "AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO";
+    int32_t anchor_off = -1;
+    int32_t anchor_count = 0;
+    int32_t scan = 0;
+    while ((scan = find_mem(data, size, anchor,
+                            (int32_t)sizeof(anchor) - 1, scan)) >= 0) {
+        anchor_off = scan;
+        anchor_count++;
+        scan += (int32_t)sizeof(anchor) - 1;
+    }
+    if (anchor_count != 1) {
+        printf("[avb_force_success] refusing match: %d anchor strings\n",
+               anchor_count);
+        return 0;
+    }
+
+    int32_t refs[MAX_REFS];
+    int32_t nrefs = find_adrl_refs(data, size, load_base,
+                                   (int64_t)anchor_off, refs, MAX_REFS);
+    if (nrefs != 1) {
+        printf("[avb_force_success] refusing match: %d anchor references\n",
+               nrefs);
+        return 0;
+    }
+
+    int32_t func_entry = find_paciasp_start(data, size, refs[0], size);
+    if (func_entry < 0) {
+        printf("[avb_force_success] refusing match: PACIASP entry not found\n");
+        return 0;
+    }
+
+    int32_t flags_site = -1;
+    int32_t flags_count = 0;
+    int32_t entry_end = func_entry + 30 * 4;
+    if (entry_end > size - 4) entry_end = size - 4;
+    for (int32_t p = func_entry; p <= entry_end; p += 4) {
+        if ((arm64_read(data, p) & 0xFFFFFFE0U) == 0x2A0303E0U) {
+            flags_site = p;
+            flags_count++;
         }
-        off += 4;
+    }
+    if (flags_count != 1) {
+        printf("[avb_force_success] refusing match: %d entry flags copies\n",
+               flags_count);
+        return 0;
     }
 
-    /* Also try vbmeta / VerifiedBoot strings */
-    const char *vb_strs[] = { "vbmeta", "VerifiedBoot", "androidboot.vbmeta" };
-    for (int s = 0; s < 3; s++) {
-        off = 0;
-        while ((off = find_ascii(data, size, vb_strs[s], off)) >= 0) {
-            int32_t refs[MAX_REFS];
-            int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                           (int64_t)off, refs, MAX_REFS);
-            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                int32_t fstart = arm64_find_function_start(
-                    data, size, refs[r], 4096);
-                if (fstart >= 0) {
-                    bool dup = false;
-                    for (int i = 0; i < nfuncs; i++)
-                        if (func_starts[i] == fstart) { dup = true; break; }
-                    if (!dup && nfuncs < 16) {
-                        func_starts[nfuncs++] = fstart;
-                        printf("  -> '%s' ref 0x%X -> func 0x%X\n",
-                               vb_strs[s], refs[r], fstart);
-                    }
-                }
-            }
-            off += (int32_t)strlen(vb_strs[s]) + 1;
+    int32_t ret_site = -1;
+    for (int32_t p = func_entry; p + 4 <= size; p += 4) {
+        if (arm64_is_ret(arm64_read(data, p))) {
+            ret_site = p;
+            break;
         }
     }
-
-    for (int i = 0; i < nfuncs; i++) {
-        int32_t fstart = func_starts[i];
-        if (fstart + 8 > size) continue;
-        uint32_t orig0 = arm64_read(data, fstart);
-        uint32_t orig1 = arm64_read(data, fstart + 4);
-        arm64_write(data, fstart, arm64_mov_x0_zero());
-        arm64_write(data, fstart + 4, arm64_ret());
-        printf("[short_circuit] patched 0x%X: %08X %08X -> MOV X0,XZR ; RET\n",
-               fstart, orig0, orig1);
-        patched++;
+    if (ret_site < 0) {
+        printf("[avb_force_success] refusing match: function RET not found\n");
+        return 0;
     }
-    if (nfuncs == 0) printf("[short_circuit] no verification functions found\n");
-    return patched;
+
+    int32_t return_site = -1;
+    int32_t return_count = 0;
+    int32_t floor = ret_site - 0x40;
+    if (floor < func_entry) floor = func_entry;
+    for (int32_t p = ret_site - 4; p >= floor; p -= 4) {
+        uint32_t ins = arm64_read(data, p);
+        if ((ins & 0xFFE0FFFFU) == 0x2A0003E0U) {
+            return_site = p;
+            return_count++;
+        }
+    }
+    if (return_count != 1) {
+        printf("[avb_force_success] refusing match: %d common return copies\n",
+               return_count);
+        return 0;
+    }
+
+    uint32_t flags_orig = arm64_read(data, flags_site);
+    uint32_t flags_new = 0x32000060U | arm64_rd(flags_orig);
+    uint32_t return_orig = arm64_read(data, return_site);
+    arm64_write(data, flags_site, flags_new);
+    arm64_write(data, return_site, 0x52800000U); /* MOV W0,#0 */
+    printf("[avb_force_success] function 0x%X, anchor 0x%X\n",
+           func_entry, anchor_off);
+    printf("[avb_force_success] flags  0x%X: %08X -> %08X\n",
+           flags_site, flags_orig, flags_new);
+    printf("[avb_force_success] return 0x%X: %08X -> %08X\n",
+           return_site, return_orig, 0x52800000U);
+    return 2;
 }
 
 /* ================================================================
@@ -465,23 +508,23 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
 
     /* Apply patches */
     result->verify_shortcircuited =
-        patch_short_circuit_verify(data, size, load_base);
+        patch_allow_verification_error(data, size, load_base);
     printf("\n");
 
-    /* Boot state array patching (primary for PE/COFF ABL) */
-    result->green_forced = patch_boot_state_array(data, size, &pe);
-    printf("\n");
-
-    /* Fallback: ADRL-based green forcing */
-    result->green_forced += patch_force_green_adrl(data, size, load_base);
-    printf("\n");
-
-    result->error_branches_noped =
-        patch_nop_error_branches(data, size, load_base);
-    printf("\n");
+    /*
+     * EFISP integration uses gbl_root_canoe after this pass.  Its patcher
+     * already handles the fake-lock/green state with anchored instruction
+     * patterns and data-flow tracking.  Do not repeat that work here:
+     * writing guessed raw string offsets into PE pointers and NOPing a
+     * nearby branch to any "red" string can make boot.efi unexecutable.
+     */
+    result->green_forced = 0;
+    result->error_branches_noped = 0;
+    printf("[efisp_safe] boot-state/green patch delegated to gbl_root_canoe\n");
+    printf("[efisp_safe] speculative red/error branch patch disabled\n\n");
 
     printf("=== Patch Summary ===\n");
-    printf("  Verify functions short-circuited: %d\n",
+    printf("  AVB force-success instructions: %d\n",
            result->verify_shortcircuited);
     printf("  Boot state forced to green: %d\n", result->green_forced);
     printf("  Error branches NOPed: %d\n", result->error_branches_noped);

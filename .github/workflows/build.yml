@@ -1,6 +1,8 @@
 name: Build ABL AVB Patcher
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths-ignore: ['**.md']
@@ -17,17 +19,31 @@ jobs:
           mkdir -p out
           cp -f abl_patcher/patch_abl_avb out/patch_abl_avb
       - name: Run unit tests
-        run: bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
+        run: |
+          cc -O2 -Wall -Wextra -std=c11 -Iabl_patcher \
+            tests/test_arm64_util.c abl_patcher/arm64_util.c \
+            -o /tmp/test_arm64_util
+          /tmp/test_arm64_util
+          bash tests/test_abl_patch.sh abl_patcher/patch_abl_avb tests/samples
+          bash tests/test_efisp_layout.sh
       - name: Install extractfv deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends liblzma-dev curl
       - name: Multi-ABL patch test
-        run: bash tests/test_multi_abl.sh abl_patcher/patch_abl_avb
-      - uses: actions/upload-artifact@v4
-        with:
-          name: patch_abl_avb
-          path: out/patch_abl_avb
-          if-no-files-found: error
-
+        run: |
+          set +e
+          bash tests/test_multi_abl.sh abl_patcher/patch_abl_avb /tmp/abl_multi_test 1 | tee /tmp/multi-abl.log
+          rc=${PIPESTATUS[0]}
+          {
+            echo '## Multi-ABL diagnostics'
+            echo '```text'
+            cat /tmp/multi-abl.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            diagnostic=$(grep -E '^  |^\[3/3\] Results:' /tmp/multi-abl.log | tr '\n' ';' | sed 's/;$//')
+            echo "::error title=Multi-ABL candidate summary::$diagnostic"
+          fi
+          exit "$rc"
   toolkit:
     runs-on: ubuntu-24.04
     steps:
