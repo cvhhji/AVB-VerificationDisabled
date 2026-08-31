@@ -17,11 +17,12 @@
 不同函数，其中包含解析器和启动参数生成逻辑；覆盖这些函数会破坏启动。
 
 新补丁不再提前返回或跳过 `avb_slot_verify()`，因为调用者仍需要它生成完整的
-`slot_data`。它先通过独立 `vbmeta` 分区名定位 `avb_slot_verify()`，再沿调用关系
-定位保存原始 flags 的外层函数入口，把外层的 `MOV Wd,W3` 改为
-`ORR Wd,W3,#1`，设置 libavb 标准的
-`AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`。这样验证调用和调用后的结果判断
-使用同一份 flags；任一层匹配不唯一时都拒绝生成产物。
+`slot_data`。它使用 libavb 的唯一诊断字符串定位 `avb_slot_verify()`，并采用
+gbl-chainload 的 patch10 双补丁：把入口的 `MOV Wd,W3` 改为
+`ORR Wd,W3,#1`，设置 `AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR`；同时把
+公共出口返回值改为 `AVB_SLOT_VERIFY_RESULT_OK`。前者让 libavb 在校验失败时仍
+构造完整 `slot_data`，后者避免假回锁后的 ABL 上层把非零验证结果判为致命错误。
+任一签名匹配不唯一时都拒绝生成产物。
 
 ## 构建
 
@@ -64,7 +65,7 @@ make test
 - 依赖 ABL 中存在特定的 boot-state 字符串和 AVB 校验函数模式；不同版本/厂商可能需要调整匹配模式。
 - 不修改 vbmeta 分区，不签名镜像，不修改 KeyMint/TEE 证明结果。
 - `boot.efi` 只能放进 gbl_root_canoe 的 EFISP 文件目录，不能直接刷入 abl。
-- AVB flags 签名必须唯一命中；零匹配或多匹配都会拒绝生成输出。
+- AVB 函数入口、flags 和公共出口签名必须唯一命中；零匹配或多匹配都会拒绝生成输出。
 
 ## 来源与许可
 

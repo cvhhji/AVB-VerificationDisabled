@@ -319,106 +319,108 @@ static int32_t find_paciasp_start(const uint8_t *data, int32_t size,
 }
 
 /* ================================================================
- * Patch 3: Set ALLOW_VERIFICATION_ERROR in avb_slot_verify()'s caller
+ * Patch 3: libavb force-success pair
  *
- * Qualcomm's bundled libavb wrapper retains the original flags and checks
- * bit 0 again after avb_slot_verify() returns.  Patching only the callee's
- * local copy preserves slot_data, but the wrapper still rejects the result.
- * Locate the callee from its standalone "vbmeta" reference, then follow BL
- * callers back to a PACIASP function entry and patch that caller's saved W3.
- * This makes both the call and the post-call decision see the same flag.
+ * This follows gbl-chainload patch10.  ALLOW_VERIFICATION_ERROR makes
+ * libavb populate slot_data, but libavb deliberately still returns the
+ * verification error.  A locked/fake-locked ABL rejects that non-zero result.
+ * Therefore both rewrites are required in avb_slot_verify():
+ *   10a. saved flags |= ALLOW_VERIFICATION_ERROR
+ *   10c. common return value = AVB_SLOT_VERIFY_RESULT_OK
  * ================================================================ */
 static int32_t patch_allow_verification_error(uint8_t *data, int32_t size,
                                               uint64_t load_base)
 {
-    int32_t inner_sites[16];
-    int32_t ninner = 0;
-    int32_t off = 0;
-    while ((off = find_ascii(data, size, "vbmeta", off)) >= 0) {
-        /* Require an independent, NUL-terminated partition-name string;
-         * reject occurrences embedded in androidboot.vbmeta.* text. */
-        if ((off == 0 || data[off - 1] == 0) &&
-            off + 6 < size && data[off + 6] == 0) {
-            int32_t refs[MAX_REFS];
-            int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                           (int64_t)off, refs, MAX_REFS);
-            for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-                /* avb_slot_verify() references the standalone vbmeta name
-                 * near its entry and then saves flags argument W3 with
-                 * MOV Wd,W3 (ORR Wd,WZR,W3).  Preserve the destination but
-                 * OR in ALLOW_VERIFICATION_ERROR (bit 0). */
-                int32_t end = refs[r] + 128;
-                if (end > size - 4) end = size - 4;
-                for (int32_t p = refs[r]; p <= end; p += 4) {
-                    uint32_t ins = arm64_read(data, p);
-                    if ((ins & 0xFFFFFFE0U) == 0x2A0303E0U && ninner < 16) {
-                        bool dup = false;
-                        for (int i = 0; i < ninner; i++)
-                            if (inner_sites[i] == p) { dup = true; break; }
-                        if (!dup) {
-                            inner_sites[ninner++] = p;
-                            printf("[avb_allow_error] vbmeta ref 0x%X -> inner flags copy 0x%X\n",
-                                   refs[r], p);
-                        }
-                    }
-                }
-            }
+    static const uint8_t anchor[] =
+        "Persistent values required for "
+        "AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO";
+    int32_t anchor_off = -1;
+    int32_t anchor_count = 0;
+    int32_t scan = 0;
+    while ((scan = find_mem(data, size, anchor,
+                            (int32_t)sizeof(anchor) - 1, scan)) >= 0) {
+        anchor_off = scan;
+        anchor_count++;
+        scan += (int32_t)sizeof(anchor) - 1;
+    }
+    if (anchor_count != 1) {
+        printf("[avb_force_success] refusing match: %d anchor strings\n",
+               anchor_count);
+        return 0;
+    }
+
+    int32_t refs[MAX_REFS];
+    int32_t nrefs = find_adrl_refs(data, size, load_base,
+                                   (int64_t)anchor_off, refs, MAX_REFS);
+    if (nrefs != 1) {
+        printf("[avb_force_success] refusing match: %d anchor references\n",
+               nrefs);
+        return 0;
+    }
+
+    int32_t func_entry = find_paciasp_start(data, size, refs[0], size);
+    if (func_entry < 0) {
+        printf("[avb_force_success] refusing match: PACIASP entry not found\n");
+        return 0;
+    }
+
+    int32_t flags_site = -1;
+    int32_t flags_count = 0;
+    int32_t entry_end = func_entry + 30 * 4;
+    if (entry_end > size - 4) entry_end = size - 4;
+    for (int32_t p = func_entry; p <= entry_end; p += 4) {
+        if ((arm64_read(data, p) & 0xFFFFFFE0U) == 0x2A0303E0U) {
+            flags_site = p;
+            flags_count++;
         }
-        off += 6;
     }
-
-    if (ninner != 1) {
-        printf("[avb_allow_error] refusing match: %d inner flag-copy candidates\n",
-               ninner);
+    if (flags_count != 1) {
+        printf("[avb_force_success] refusing match: %d entry flags copies\n",
+               flags_count);
         return 0;
     }
 
-    int32_t inner_start = find_paciasp_start(data, size, inner_sites[0], 512);
-    if (inner_start < 0) {
-        printf("[avb_allow_error] refusing match: inner PACIASP entry not found\n");
+    int32_t ret_site = -1;
+    for (int32_t p = func_entry; p + 4 <= size; p += 4) {
+        if (arm64_is_ret(arm64_read(data, p))) {
+            ret_site = p;
+            break;
+        }
+    }
+    if (ret_site < 0) {
+        printf("[avb_force_success] refusing match: function RET not found\n");
         return 0;
     }
 
-    int32_t outer_sites[16];
-    int32_t nouter = 0;
-    for (int32_t p = 0; p + 4 <= size; p += 4) {
+    int32_t return_site = -1;
+    int32_t return_count = 0;
+    int32_t floor = ret_site - 0x40;
+    if (floor < func_entry) floor = func_entry;
+    for (int32_t p = ret_site - 4; p >= floor; p -= 4) {
         uint32_t ins = arm64_read(data, p);
-        if (!arm64_is_bl(ins) || arm64_branch_target(p, ins) != inner_start)
-            continue;
-
-        int32_t caller = find_paciasp_start(data, size, p, 16384);
-        if (caller < 0 || caller == inner_start) continue; /* recursive call */
-
-        int32_t end = caller + 128;
-        if (end > p) end = p;
-        for (int32_t q = caller + 4; q <= end; q += 4) {
-            uint32_t save = arm64_read(data, q);
-            if ((save & 0xFFFFFFE0U) != 0x2A0303E0U) continue;
-            bool dup = false;
-            for (int i = 0; i < nouter; i++)
-                if (outer_sites[i] == q) { dup = true; break; }
-            if (!dup && nouter < 16) {
-                outer_sites[nouter++] = q;
-                printf("[avb_allow_error] BL 0x%X -> outer flags copy 0x%X\n",
-                       p, q);
-            }
+        if ((ins & 0xFFE0FFFFU) == 0x2A0003E0U) {
+            return_site = p;
+            return_count++;
         }
     }
-
-    if (nouter != 1) {
-        printf("[avb_allow_error] refusing match: %d outer flag-copy candidates\n",
-               nouter);
+    if (return_count != 1) {
+        printf("[avb_force_success] refusing match: %d common return copies\n",
+               return_count);
         return 0;
     }
 
-    int32_t site = outer_sites[0];
-    uint32_t orig = arm64_read(data, site);
-    uint8_t rd = arm64_rd(orig);
-    uint32_t patched = 0x32000060U | rd; /* ORR Wd,W3,#1 */
-    arm64_write(data, site, patched);
-    printf("[avb_allow_error] patched outer caller 0x%X: %08X -> %08X (flags |= 1)\n",
-           site, orig, patched);
-    return 1;
+    uint32_t flags_orig = arm64_read(data, flags_site);
+    uint32_t flags_new = 0x32000060U | arm64_rd(flags_orig);
+    uint32_t return_orig = arm64_read(data, return_site);
+    arm64_write(data, flags_site, flags_new);
+    arm64_write(data, return_site, 0x52800000U); /* MOV W0,#0 */
+    printf("[avb_force_success] function 0x%X, anchor 0x%X\n",
+           func_entry, anchor_off);
+    printf("[avb_force_success] flags  0x%X: %08X -> %08X\n",
+           flags_site, flags_orig, flags_new);
+    printf("[avb_force_success] return 0x%X: %08X -> %08X\n",
+           return_site, return_orig, 0x52800000U);
+    return 2;
 }
 
 /* ================================================================
@@ -522,7 +524,7 @@ bool avb_patch_abl(uint8_t *data, int32_t size, uint64_t load_base,
     printf("[efisp_safe] speculative red/error branch patch disabled\n\n");
 
     printf("=== Patch Summary ===\n");
-    printf("  Verify functions short-circuited: %d\n",
+    printf("  AVB force-success instructions: %d\n",
            result->verify_shortcircuited);
     printf("  Boot state forced to green: %d\n", result->green_forced);
     printf("  Error branches NOPed: %d\n", result->error_branches_noped);
