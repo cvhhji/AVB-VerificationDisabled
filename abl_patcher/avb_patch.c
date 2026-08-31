@@ -306,90 +306,59 @@ static int32_t patch_force_green_adrl(uint8_t *data, int32_t size,
 }
 
 /* ================================================================
- * Patch 3: Short-circuit AVB verification entry
+ * Patch 3: Route around AVB2 verification
  * ================================================================ */
 static int32_t patch_short_circuit_verify(uint8_t *data, int32_t size,
                                           uint64_t load_base)
 {
-    int32_t patched = 0;
     int32_t func_starts[16];
     int32_t nfuncs = 0;
-
-    const uint8_t avb0[] = { 'A', 'V', 'B', '0' };
     int32_t off = 0;
-    while ((off = find_mem(data, size, avb0, 4, off)) >= 0) {
-        printf("[short_circuit] 'AVB0' at offset 0x%X\n", off);
-        int32_t refs[MAX_REFS];
-        int32_t nrefs = find_adrl_refs(data, size, load_base,
-                                       (int64_t)off, refs, MAX_REFS);
-        for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
-            int32_t fstart = arm64_find_function_start(
-                data, size, refs[r], 4096);
-            if (fstart >= 0) {
-                bool dup = false;
-                for (int i = 0; i < nfuncs; i++)
-                    if (func_starts[i] == fstart) { dup = true; break; }
-                if (!dup && nfuncs < 16) {
-                    func_starts[nfuncs++] = fstart;
-                    printf("  -> function at 0x%X (ref 0x%X)\n",
-                           fstart, refs[r]);
-                }
-            }
-        }
-        off += 4;
-    }
-
-    /* Also try vbmeta / VerifiedBoot strings */
-    const char *vb_strs[] = { "vbmeta", "VerifiedBoot", "androidboot.vbmeta" };
-    for (int s = 0; s < 3; s++) {
-        off = 0;
-        while ((off = find_ascii(data, size, vb_strs[s], off)) >= 0) {
+    while ((off = find_ascii(data, size, "vbmeta", off)) >= 0) {
+        /* Require an independent, NUL-terminated partition-name string;
+         * reject occurrences embedded in androidboot.vbmeta.* text. */
+        if ((off == 0 || data[off - 1] == 0) &&
+            off + 6 < size && data[off + 6] == 0) {
             int32_t refs[MAX_REFS];
             int32_t nrefs = find_adrl_refs(data, size, load_base,
                                            (int64_t)off, refs, MAX_REFS);
             for (int r = 0; r < nrefs && r < MAX_REFS; r++) {
                 int32_t fstart = arm64_find_function_start(
                     data, size, refs[r], 4096);
-                if (fstart >= 0) {
+                /* Is_VERIFIED_BOOT_2 references the vbmeta partition at the
+                 * beginning of a small routing function.  Other vbmeta
+                 * consumers reference it much later in their functions. */
+                if (fstart >= 0 && refs[r] >= fstart &&
+                    refs[r] - fstart <= 16 && nfuncs < 16) {
                     bool dup = false;
                     for (int i = 0; i < nfuncs; i++)
                         if (func_starts[i] == fstart) { dup = true; break; }
-                    if (!dup && nfuncs < 16) {
+                    if (!dup) {
                         func_starts[nfuncs++] = fstart;
-                        printf("  -> '%s' ref 0x%X -> func 0x%X\n",
-                               vb_strs[s], refs[r], fstart);
+                        printf("[avb2_route] vbmeta ref 0x%X -> func 0x%X\n",
+                               refs[r], fstart);
                     }
                 }
             }
-            off += (int32_t)strlen(vb_strs[s]) + 1;
         }
+        off += 6;
     }
 
-    /*
-     * Fail closed: a string reference is not proof that a function is the
-     * AVB verification entry point.  Patching several candidates was the
-     * main source of non-booting EFISP loaders.  Until a device-specific
-     * signature is available, accept exactly one candidate only.
-     */
     if (nfuncs != 1) {
-        printf("[short_circuit] refusing ambiguous match: %d candidate functions\n",
+        printf("[avb2_route] refusing match: %d routing candidates\n",
                nfuncs);
         return 0;
     }
 
-    for (int i = 0; i < nfuncs; i++) {
-        int32_t fstart = func_starts[i];
-        if (fstart + 8 > size) continue;
-        uint32_t orig0 = arm64_read(data, fstart);
-        uint32_t orig1 = arm64_read(data, fstart + 4);
-        arm64_write(data, fstart, arm64_mov_x0_zero());
-        arm64_write(data, fstart + 4, arm64_ret());
-        printf("[short_circuit] patched 0x%X: %08X %08X -> MOV X0,XZR ; RET\n",
-               fstart, orig0, orig1);
-        patched++;
-    }
-    if (nfuncs == 0) printf("[short_circuit] no verification functions found\n");
-    return patched;
+    int32_t fstart = func_starts[0];
+    if (fstart + 8 > size) return 0;
+    uint32_t orig0 = arm64_read(data, fstart);
+    uint32_t orig1 = arm64_read(data, fstart + 4);
+    arm64_write(data, fstart, arm64_mov_x0_zero());
+    arm64_write(data, fstart + 4, arm64_ret());
+    printf("[avb2_route] patched 0x%X: %08X %08X -> FALSE ; RET\n",
+           fstart, orig0, orig1);
+    return 1;
 }
 
 /* ================================================================

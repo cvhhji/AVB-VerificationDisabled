@@ -1,12 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Core logic for patching Qualcomm ABL (Android Bootloader) to disable
- * AVB verification at BL stage while preserving fake-relock (locked/green).
+ * Core logic for routing Qualcomm ABL around AVB2 verification.
  *
- * Patches applied:
- *   1. Force verifiedbootstate=green  (never orange/red, hides unlock)
- *   2. Short-circuit AVB verification entry  (return EFI_SUCCESS)
- *   3. NOP branches to red/error state  (prevent boot failure screen)
+ * Fake-relock/green handling is applied separately by gbl_root_canoe.
  */
 #ifndef AVB_PATCH_H
 #define AVB_PATCH_H
