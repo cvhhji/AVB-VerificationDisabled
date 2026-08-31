@@ -31,7 +31,7 @@ jobs:
       - name: Multi-ABL patch test
         run: |
           set +e
-          bash tests/test_multi_abl.sh abl_patcher/patch_abl_avb | tee /tmp/multi-abl.log
+          bash tests/test_multi_abl.sh abl_patcher/patch_abl_avb /tmp/abl_multi_test 1 | tee /tmp/multi-abl.log
           rc=${PIPESTATUS[0]}
           {
             echo '## Multi-ABL diagnostics'
@@ -39,8 +39,10 @@ jobs:
             cat /tmp/multi-abl.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          diagnostic=$(grep -E '^  |^\[3/3\] Results:' /tmp/multi-abl.log | tr '\n' ';' | sed 's/;$//')
-          echo "::error title=Multi-ABL candidate summary::$diagnostic"
+          if [ "$rc" -ne 0 ]; then
+            diagnostic=$(grep -E '^  |^\[3/3\] Results:' /tmp/multi-abl.log | tr '\n' ';' | sed 's/;$//')
+            echo "::error title=Multi-ABL candidate summary::$diagnostic"
+          fi
           exit "$rc"
       - uses: actions/upload-artifact@v4
         with:

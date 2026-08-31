@@ -5,6 +5,7 @@ set -eu
 
 PATCHER="${1:-abl_patcher/patch_abl_avb}"
 WORK_DIR="${2:-/tmp/abl_multi_test}"
+EXPECT_REFUSAL="${3:-0}"
 GBL_RAW="https://raw.githubusercontent.com/cvhhji/gbl_root_canoe/main"
 
 DEVICES="CPH2841 OPD2513 PLK110 PLR110 PLZ110 PMA120 myron nezha nezha_global pandora popsicle pudding"
@@ -92,10 +93,14 @@ for device in $DEVICES; do
             candidates=$(sed -n 's/.*refusing ambiguous match: \([0-9][0-9]*\) candidate.*/\1/p' "$log" | tail -1)
             if [ -n "$candidates" ]; then
                 echo "WARN (ambiguous: $candidates candidates)"
-                echo "::warning title=$device ABL::AVB match refused: $candidates candidate functions"
+                if [ "$EXPECT_REFUSAL" != "1" ]; then
+                    echo "::warning title=$device ABL::AVB match refused: $candidates candidate functions"
+                fi
             else
                 echo "WARN (no verified candidate)"
-                echo "::warning title=$device ABL::No verified AVB candidate function"
+                if [ "$EXPECT_REFUSAL" != "1" ]; then
+                    echo "::warning title=$device ABL::No verified AVB candidate function"
+                fi
             fi
             sed -n '/\[short_circuit\]/p; /  -> /p' "$log" | sed 's/^/      /'
             SKIP=$((SKIP + 1))
@@ -109,6 +114,14 @@ done
 
 echo ""
 echo "[3/3] Results: PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+if [ "$EXPECT_REFUSAL" = "1" ]; then
+    if [ "$PASS" -ne 0 ] || [ "$FAIL" -ne 0 ] || [ "$SKIP" -ne 12 ]; then
+        echo "FAIL: unsafe AVB patcher must refuse all 12 known ABL samples"
+        exit 1
+    fi
+    echo "PASS: unsafe AVB patcher refused all known ambiguous samples"
+    exit 0
+fi
 if [ "$PASS" -eq 0 ]; then
     echo "FAIL: no ABL sample produced a verified patch"
     exit 1
